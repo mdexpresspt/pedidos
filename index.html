@@ -342,6 +342,7 @@ const { useState, useEffect, useRef } = React;
 const uid = () => Math.random().toString(36).slice(2, 9);
 const STORAGE_KEY = "dispatch-desk-shipments-v1";
 const API_KEY_STORAGE = "dispatch-desk-api-key-v1";
+const VAN_STORAGE = "dispatch-desk-vans-v1";
 const emptyShipment = () => ({
   id: uid(),
   label: "",
@@ -388,6 +389,131 @@ function parseSupplierText(text) {
   if (/(no customs|sem customs|customs.{0,15}(not|n[aã]o).{0,15}(need|necess))/i.test(lower)) result.customs = "no";
   else if (/customs/.test(lower)) result.customs = "yes";
   return result;
+}
+function boxFitsRotated(box, van) {
+  const b = [box.length, box.width, box.height].map(Number).sort((a, c) => a - c);
+  const v = [van.length, van.width, van.height].map(Number).sort((a, c) => a - c);
+  return b[0] <= v[0] && b[1] <= v[1] && b[2] <= v[2];
+}
+function permutations3(l, w, h) {
+  return [[l, w, h], [l, h, w], [w, l, h], [w, h, l], [h, l, w], [h, w, l]];
+}
+function packBoxes(van, items) {
+  const vL = parseFloat(van.length) || 0;
+  const vW = parseFloat(van.width) || 0;
+  const vH = parseFloat(van.height) || 0;
+  let units = [];
+  items.forEach((it) => {
+    const l = parseFloat(it.length) || 0;
+    const w = parseFloat(it.width) || 0;
+    const h = parseFloat(it.height) || 0;
+    const weight = parseFloat(it.weight) || 0;
+    const qty = parseInt(it.qty, 10) || 1;
+    for (let i = 0; i < qty; i++) units.push({ id: `${it.id}-${i}`, sourceId: it.id, l, w, h, weight });
+  });
+  units.sort((a, b) => b.l * b.w * b.h - a.l * a.w * a.h);
+  let x = 0, y = 0, z = 0, maxRowDepth = 0, maxLayerHeight = 0;
+  const placed = [];
+  const unplaced = [];
+  function tryPlaceAt(u) {
+    for (const [pl, pw, ph] of permutations3(u.l, u.w, u.h)) {
+      if (x + pl <= vL && y + pw <= vW && z + ph <= vH) return [pl, pw, ph];
+    }
+    return null;
+  }
+  units.forEach((u) => {
+    let dims = tryPlaceAt(u);
+    if (!dims) {
+      x = 0;
+      y += maxRowDepth;
+      maxRowDepth = 0;
+      dims = tryPlaceAt(u);
+    }
+    if (!dims) {
+      x = 0;
+      y = 0;
+      z += maxLayerHeight;
+      maxLayerHeight = 0;
+      dims = tryPlaceAt(u);
+    }
+    if (!dims) {
+      unplaced.push(u);
+      return;
+    }
+    const [pl, pw, ph] = dims;
+    placed.push({ ...u, x, y, z, l: pl, w: pw, h: ph });
+    x += pl;
+    maxRowDepth = Math.max(maxRowDepth, pw);
+    maxLayerHeight = Math.max(maxLayerHeight, ph);
+  });
+  return { placed, unplaced };
+}
+function isoProject(x, y, z) {
+  const rad = Math.PI / 6;
+  return [(x - y) * Math.cos(rad), (x + y) * Math.sin(rad) - z];
+}
+const BOX_COLORS = ["#E8A33D", "#5FAE7D", "#6FA8DC", "#C77DFF", "#F2789F", "#7DD3C0", "#F2A65A", "#9AA5FF"];
+function CargoIsoView({ van, placed }) {
+  const vL = parseFloat(van.length) || 0;
+  const vW = parseFloat(van.width) || 0;
+  const vH = parseFloat(van.height) || 0;
+  if (!vL || !vW || !vH) return null;
+  function boxFaces(x, y, z, l, w, h) {
+    const top = [[x, y, z + h], [x + l, y, z + h], [x + l, y + w, z + h], [x, y + w, z + h]].map((p) => isoProject(...p));
+    const right = [[x + l, y, z], [x + l, y + w, z], [x + l, y + w, z + h], [x + l, y, z + h]].map((p) => isoProject(...p));
+    const front = [[x, y + w, z], [x + l, y + w, z], [x + l, y + w, z + h], [x, y + w, z + h]].map((p) => isoProject(...p));
+    return { top, right, front };
+  }
+  function polyStr(pts) {
+    return pts.map((p) => p.join(",")).join(" ");
+  }
+  const cabLength = vL * 0.32;
+  const cabHeight = vH * 0.62;
+  const wheelR = Math.max(vL, vW, vH) * 0.045;
+  const groundZ = -wheelR * 1.1;
+  const cabFaces = boxFaces(-cabLength, vW * 0.08, 0, cabLength, vW * 0.84, cabHeight);
+  const cargoFaces = boxFaces(0, 0, 0, vL, vW, vH);
+  const allCorners = [
+    [-cabLength, vW * 0.08, 0],
+    [vL, vW, vH],
+    [-cabLength, vW * 0.92, cabHeight],
+    [0, 0, 0],
+    [vL, 0, 0],
+    [0, vW, 0],
+    [vL, vW, 0],
+    [0, 0, vH],
+    [vL, 0, vH],
+    [0, vW, vH],
+    [vL, vW, vH],
+    [-cabLength, vW * 0.08, groundZ],
+    [vL, vW, groundZ]
+  ].map((p) => isoProject(...p));
+  const xs = allCorners.map((p) => p[0]);
+  const ys = allCorners.map((p) => p[1]);
+  const pad = Math.max(vL, vW, vH) * 0.16;
+  const viewMinX = Math.min(...xs) - pad;
+  const viewMinY = Math.min(...ys) - pad;
+  const viewW = Math.max(...xs) - Math.min(...xs) + pad * 2;
+  const viewH = Math.max(...ys) - Math.min(...ys) + pad * 2;
+  const strokeW = Math.max(vL, vW, vH) * 6e-3;
+  const wheelXs = [-cabLength * 0.55, vL * 0.8];
+  const wheels = wheelXs.map((wx) => isoProject(wx, vW + wheelR * 0.3, groundZ));
+  const sortedPlaced = placed.slice().sort((a, b) => a.x + a.y - a.z - (b.x + b.y - b.z));
+  return /* @__PURE__ */ React.createElement("svg", { viewBox: `${viewMinX} ${viewMinY} ${viewW} ${viewH}`, style: { width: "100%", height: "auto", display: "block" } }, /* @__PURE__ */ React.createElement(
+    "ellipse",
+    {
+      cx: isoProject((vL - cabLength) / 2, vW / 2, groundZ)[0],
+      cy: isoProject((vL - cabLength) / 2, vW / 2, groundZ)[1] + wheelR * 0.4,
+      rx: (vL + cabLength) * 0.42,
+      ry: wheelR * 1.6,
+      fill: "#000000",
+      opacity: 0.35
+    }
+  ), wheels.map((w, i) => /* @__PURE__ */ React.createElement("g", { key: i }, /* @__PURE__ */ React.createElement("circle", { cx: w[0], cy: w[1], r: wheelR, fill: "#15171A", stroke: "#3E4247", strokeWidth: strokeW }), /* @__PURE__ */ React.createElement("circle", { cx: w[0], cy: w[1], r: wheelR * 0.42, fill: "#3E4247" }))), /* @__PURE__ */ React.createElement("polygon", { points: polyStr(cabFaces.right), fill: "#2A2E33", stroke: "#0E1013", strokeWidth: strokeW }), /* @__PURE__ */ React.createElement("polygon", { points: polyStr(cabFaces.top), fill: "#33373D", stroke: "#0E1013", strokeWidth: strokeW }), /* @__PURE__ */ React.createElement("polygon", { points: polyStr(cabFaces.front), fill: "#6FA8DC", opacity: 0.55, stroke: "#0E1013", strokeWidth: strokeW }), /* @__PURE__ */ React.createElement("polygon", { points: polyStr(cargoFaces.top), fill: "#171A1E", opacity: 0.5, stroke: "#3E4247", strokeWidth: strokeW }), /* @__PURE__ */ React.createElement("polygon", { points: polyStr(cargoFaces.right), fill: "#171A1E", opacity: 0.35, stroke: "#3E4247", strokeWidth: strokeW }), sortedPlaced.map((b, i) => {
+    const faces = boxFaces(b.x, b.y, b.z, b.l, b.w, b.h);
+    const color = BOX_COLORS[i % BOX_COLORS.length];
+    return /* @__PURE__ */ React.createElement("g", { key: b.id }, /* @__PURE__ */ React.createElement("polygon", { points: polyStr(faces.top), fill: color, opacity: 0.95, stroke: "#0E1013", strokeWidth: strokeW }), /* @__PURE__ */ React.createElement("polygon", { points: polyStr(faces.right), fill: color, opacity: 0.65, stroke: "#0E1013", strokeWidth: strokeW }), /* @__PURE__ */ React.createElement("polygon", { points: polyStr(faces.front), fill: color, opacity: 0.82, stroke: "#0E1013", strokeWidth: strokeW }));
+  }), /* @__PURE__ */ React.createElement("polygon", { points: polyStr(cargoFaces.front), fill: "none", stroke: "#3E4247", strokeWidth: strokeW * 1.4 }));
 }
 function buildSupplierMessage(f, lang, translated) {
   const pickupLoc = (translated == null ? void 0 : translated.pickupLoc) || f.pickupLoc;
@@ -525,6 +651,44 @@ function DispatchDesk() {
   const [showSettings, setShowSettings] = useState(false);
   const [translating, setTranslating] = useState(null);
   const [translationCache, setTranslationCache] = useState({});
+  const [vanProfiles, setVanProfiles] = useState(() => {
+    try {
+      return JSON.parse(localStorage.getItem(VAN_STORAGE)) || [];
+    } catch (e) {
+      return [];
+    }
+  });
+  const [currentVan, setCurrentVan] = useState({ name: "", length: "", width: "", height: "", capacity: "" });
+  const [selectedVanId, setSelectedVanId] = useState("");
+  const [cargoItems, setCargoItems] = useState([]);
+  const [cargoDraft, setCargoDraft] = useState({ length: "", width: "", height: "", weight: "", qty: "1" });
+  useEffect(() => {
+    localStorage.setItem(VAN_STORAGE, JSON.stringify(vanProfiles));
+  }, [vanProfiles]);
+  function selectVanProfile(id) {
+    setSelectedVanId(id);
+    const van = vanProfiles.find((v) => v.id === id);
+    if (van) setCurrentVan({ name: van.name, length: van.length, width: van.width, height: van.height, capacity: van.capacity });
+  }
+  function saveVanProfile() {
+    const name = (currentVan.name || "").trim();
+    if (!name || !currentVan.length || !currentVan.width || !currentVan.height) return;
+    const newVan = { id: uid(), name, length: currentVan.length, width: currentVan.width, height: currentVan.height, capacity: currentVan.capacity };
+    setVanProfiles((list) => [...list, newVan]);
+    setSelectedVanId(newVan.id);
+  }
+  function deleteVanProfile(id) {
+    setVanProfiles((list) => list.filter((v) => v.id !== id));
+    if (selectedVanId === id) setSelectedVanId("");
+  }
+  function addCargoItem() {
+    if (!cargoDraft.length || !cargoDraft.width || !cargoDraft.height) return;
+    setCargoItems((list) => [...list, { id: uid(), ...cargoDraft }]);
+    setCargoDraft({ length: "", width: "", height: "", weight: "", qty: "1" });
+  }
+  function removeCargoItem(id) {
+    setCargoItems((list) => list.filter((it) => it.id !== id));
+  }
   function saveApiKey() {
     localStorage.setItem(API_KEY_STORAGE, apiKeyInput.trim());
     setApiKey(apiKeyInput.trim());
@@ -604,8 +768,9 @@ function DispatchDesk() {
   function updateShipmentField(id, field, value) {
     setShipments((list) => list.map((sh) => sh.id === id ? { ...sh, [field]: value } : sh));
   }
-  const isNewView = activeTabId === "new" || !shipments.some((sh) => sh.id === activeTabId);
-  return /* @__PURE__ */ React.createElement("div", { style: S.shell }, /* @__PURE__ */ React.createElement("div", { style: S.sidebar }, /* @__PURE__ */ React.createElement("div", { style: S.sidebarHeader }, /* @__PURE__ */ React.createElement("div", { style: S.headerIcon }, "✈️"), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { style: S.title }, "Dispatch Desk"), /* @__PURE__ */ React.createElement("div", { style: S.subtitle }, "gestão de transportes"))), /* @__PURE__ */ React.createElement("button", { style: { ...S.primaryBtn, marginBottom: 18 }, onClick: () => setActiveTabId("new") }, "+ Novo pedido"), /* @__PURE__ */ React.createElement("div", { style: S.navList }, shipments.length === 0 && /* @__PURE__ */ React.createElement("div", { style: S.navEmpty }, "Sem pedidos ainda"), shipments.map((sh) => {
+  const isCalculatorView = activeTabId === "calculator";
+  const isNewView = !isCalculatorView && (activeTabId === "new" || !shipments.some((sh) => sh.id === activeTabId));
+  return /* @__PURE__ */ React.createElement("div", { style: S.shell }, /* @__PURE__ */ React.createElement("div", { style: S.sidebar }, /* @__PURE__ */ React.createElement("div", { style: S.sidebarHeader }, /* @__PURE__ */ React.createElement("div", { style: S.headerIcon }, "✈️"), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { style: S.title }, "Dispatch Desk"), /* @__PURE__ */ React.createElement("div", { style: S.subtitle }, "gestão de transportes"))), /* @__PURE__ */ React.createElement("button", { style: { ...S.primaryBtn, marginBottom: 10 }, onClick: () => setActiveTabId("new") }, "+ Novo pedido"), /* @__PURE__ */ React.createElement("button", { style: { ...S.secondaryBtnWide, marginBottom: 18, ...isCalculatorView ? { background: "#E8A33D", color: "#0E1013" } : {} }, onClick: () => setActiveTabId("calculator") }, "📐 Calculadora de Carga"), /* @__PURE__ */ React.createElement("div", { style: S.navList }, shipments.length === 0 && /* @__PURE__ */ React.createElement("div", { style: S.navEmpty }, "Sem pedidos ainda"), shipments.map((sh) => {
     const isActive = sh.id === activeTabId;
     return /* @__PURE__ */ React.createElement("div", { key: sh.id, style: { ...S.navItem, ...isActive ? S.navItemActive : {} }, onClick: () => setActiveTabId(sh.id) }, /* @__PURE__ */ React.createElement("div", { style: { flex: 1, minWidth: 0 } }, /* @__PURE__ */ React.createElement("div", { style: S.navItemLabel }, sh.label.trim() ? sh.label.trim() : `${sh.pickupLoc || "?"} → ${sh.deliveryLoc || "?"}`), /* @__PURE__ */ React.createElement("div", { style: S.navItemSub }, sh.pickupLoc || "?", " → ", sh.deliveryLoc || "?")), /* @__PURE__ */ React.createElement("button", { style: S.tabClose, onClick: (e) => {
       e.stopPropagation();
@@ -614,7 +779,20 @@ function DispatchDesk() {
   })), /* @__PURE__ */ React.createElement("button", { style: S.settingsBtnWide, onClick: () => {
     setApiKeyInput(apiKey);
     setShowSettings((s) => !s);
-  } }, "⚙️ Definições")), /* @__PURE__ */ React.createElement("div", { style: S.main }, /* @__PURE__ */ React.createElement("div", { style: S.mainInner }, showSettings && /* @__PURE__ */ React.createElement("div", { style: S.card }, /* @__PURE__ */ React.createElement("div", { style: S.cardLabel }, "Tradução automática (opcional)"), /* @__PURE__ */ React.createElement("div", { style: S.hint }, "Para traduzir automaticamente o texto que escreves (não só os rótulos), cola aqui a tua chave da API da Anthropic. Fica guardada só neste browser. Sem chave, os botões PT/EN continuam a trocar o modelo da mensagem, mas o texto que escreveste mantém-se como o inseriste."), /* @__PURE__ */ React.createElement("input", { style: { ...S.input, marginTop: 10, marginBottom: 10 }, type: "password", placeholder: "sk-ant-...", value: apiKeyInput, onChange: (e) => setApiKeyInput(e.target.value) }), /* @__PURE__ */ React.createElement("button", { style: S.primaryBtn, onClick: saveApiKey }, "Guardar chave")), isNewView && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("div", { style: S.pageHeading }, "Novo pedido"), /* @__PURE__ */ React.createElement("div", { style: S.card }, /* @__PURE__ */ React.createElement("div", { style: S.cardLabel }, "Colar texto (WhatsApp)"), /* @__PURE__ */ React.createElement(
+  } }, "⚙️ Definições")), /* @__PURE__ */ React.createElement("div", { style: S.main }, /* @__PURE__ */ React.createElement("div", { style: S.mainInner }, showSettings && /* @__PURE__ */ React.createElement("div", { style: S.card }, /* @__PURE__ */ React.createElement("div", { style: S.cardLabel }, "Tradução automática (opcional)"), /* @__PURE__ */ React.createElement("div", { style: S.hint }, "Para traduzir automaticamente o texto que escreves (não só os rótulos), cola aqui a tua chave da API da Anthropic. Fica guardada só neste browser. Sem chave, os botões PT/EN continuam a trocar o modelo da mensagem, mas o texto que escreveste mantém-se como o inseriste."), /* @__PURE__ */ React.createElement("input", { style: { ...S.input, marginTop: 10, marginBottom: 10 }, type: "password", placeholder: "sk-ant-...", value: apiKeyInput, onChange: (e) => setApiKeyInput(e.target.value) }), /* @__PURE__ */ React.createElement("button", { style: S.primaryBtn, onClick: saveApiKey }, "Guardar chave")), isCalculatorView && (() => {
+    const hasVan = currentVan.length && currentVan.width && currentVan.height;
+    const pack = hasVan && cargoItems.length > 0 ? packBoxes(currentVan, cargoItems) : { placed: [], unplaced: [] };
+    const vCapacity = parseFloat(currentVan.capacity) || 0;
+    const totalWeight = cargoItems.reduce((sum, it) => sum + (parseFloat(it.weight) || 0) * (parseInt(it.qty, 10) || 1), 0);
+    const weightRatio = vCapacity > 0 ? totalWeight / vCapacity : null;
+    const fitsByWeight = weightRatio === null ? null : weightRatio <= 1;
+    const allPlaced = pack.unplaced.length === 0;
+    const overall = allPlaced && fitsByWeight !== false;
+    return /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("div", { style: S.pageHeading }, "Calculadora de Carga"), /* @__PURE__ */ React.createElement("div", { className: "dd-grid" }, /* @__PURE__ */ React.createElement("div", { style: S.card }, /* @__PURE__ */ React.createElement("div", { style: S.cardLabel }, "Carrinha"), vanProfiles.length > 0 && /* @__PURE__ */ React.createElement("div", { style: { marginBottom: 14 } }, /* @__PURE__ */ React.createElement(Field, { label: "Carrinhas guardadas" }, /* @__PURE__ */ React.createElement("select", { style: S.input, value: selectedVanId, onChange: (e) => selectVanProfile(e.target.value) }, /* @__PURE__ */ React.createElement("option", { value: "" }, "— escolher / editar à mão —"), vanProfiles.map((v) => /* @__PURE__ */ React.createElement("option", { key: v.id, value: v.id }, v.name, " (", v.length, "×", v.width, "×", v.height, "cm)")))), selectedVanId && /* @__PURE__ */ React.createElement("button", { style: { ...S.iconBtn, marginTop: 8 }, onClick: () => deleteVanProfile(selectedVanId) }, "🗑 Remover carrinha guardada")), /* @__PURE__ */ React.createElement("div", { style: { marginBottom: 12 } }, /* @__PURE__ */ React.createElement(Field, { label: "Nome (para guardar)" }, /* @__PURE__ */ React.createElement("input", { style: S.input, value: currentVan.name, onChange: (e) => setCurrentVan({ ...currentVan, name: e.target.value }), placeholder: "ex: Caddy" }))), /* @__PURE__ */ React.createElement("div", { style: S.grid2 }, /* @__PURE__ */ React.createElement(Field, { label: "Comprimento (cm)" }, /* @__PURE__ */ React.createElement("input", { style: S.input, type: "number", value: currentVan.length, onChange: (e) => setCurrentVan({ ...currentVan, length: e.target.value }), placeholder: "200" })), /* @__PURE__ */ React.createElement(Field, { label: "Largura (cm)" }, /* @__PURE__ */ React.createElement("input", { style: S.input, type: "number", value: currentVan.width, onChange: (e) => setCurrentVan({ ...currentVan, width: e.target.value }), placeholder: "120" })), /* @__PURE__ */ React.createElement(Field, { label: "Altura (cm)" }, /* @__PURE__ */ React.createElement("input", { style: S.input, type: "number", value: currentVan.height, onChange: (e) => setCurrentVan({ ...currentVan, height: e.target.value }), placeholder: "110" })), /* @__PURE__ */ React.createElement(Field, { label: "Capacidade de peso (kg, opcional)" }, /* @__PURE__ */ React.createElement("input", { style: S.input, type: "number", value: currentVan.capacity, onChange: (e) => setCurrentVan({ ...currentVan, capacity: e.target.value }), placeholder: "800" }))), /* @__PURE__ */ React.createElement("button", { style: S.secondaryBtnWide, onClick: saveVanProfile }, "+ Guardar esta carrinha")), /* @__PURE__ */ React.createElement("div", { style: S.card }, /* @__PURE__ */ React.createElement("div", { style: S.cardLabel }, "Carga (várias caixas)"), cargoItems.length > 0 && /* @__PURE__ */ React.createElement("div", { style: S.quoteList }, cargoItems.map((it) => {
+      const doesntFit = hasVan && !boxFitsRotated(it, currentVan);
+      return /* @__PURE__ */ React.createElement("div", { key: it.id, style: { ...S.quoteRow, cursor: "default", ...doesntFit ? { border: "1px solid #D9705A" } : {} } }, /* @__PURE__ */ React.createElement("div", { style: { flex: 1 } }, /* @__PURE__ */ React.createElement("div", { style: S.quoteSupplier }, it.qty, "× ", it.length, "×", it.width, "×", it.height, "cm", it.weight ? `, ${it.weight}kg/un` : ""), doesntFit && /* @__PURE__ */ React.createElement("div", { style: { ...S.quoteNotes, color: "#D9705A" } }, "Não cabe nesta carrinha (nem rodada)")), /* @__PURE__ */ React.createElement("button", { style: S.iconBtnSmall, onClick: () => removeCargoItem(it.id) }, "🗑"));
+    })), /* @__PURE__ */ React.createElement("div", { style: S.addQuoteGrid }, /* @__PURE__ */ React.createElement("input", { style: S.input, type: "number", placeholder: "Comprimento (cm)", value: cargoDraft.length, onChange: (e) => setCargoDraft({ ...cargoDraft, length: e.target.value }) }), /* @__PURE__ */ React.createElement("input", { style: S.input, type: "number", placeholder: "Largura (cm)", value: cargoDraft.width, onChange: (e) => setCargoDraft({ ...cargoDraft, width: e.target.value }) }), /* @__PURE__ */ React.createElement("input", { style: S.input, type: "number", placeholder: "Altura (cm)", value: cargoDraft.height, onChange: (e) => setCargoDraft({ ...cargoDraft, height: e.target.value }) }), /* @__PURE__ */ React.createElement("input", { style: S.input, type: "number", placeholder: "Peso por unidade (kg)", value: cargoDraft.weight, onChange: (e) => setCargoDraft({ ...cargoDraft, weight: e.target.value }) }), /* @__PURE__ */ React.createElement("input", { style: S.input, type: "number", min: "1", placeholder: "Quantidade", value: cargoDraft.qty, onChange: (e) => setCargoDraft({ ...cargoDraft, qty: e.target.value }) }), /* @__PURE__ */ React.createElement("button", { style: S.secondaryBtn, onClick: addCargoItem }, "+ Adicionar caixa")))), hasVan && cargoItems.length > 0 && /* @__PURE__ */ React.createElement("div", { style: { ...S.card, marginTop: 24 } }, /* @__PURE__ */ React.createElement("div", { style: S.rowBetween }, /* @__PURE__ */ React.createElement("div", { style: S.cardLabel }, "Arrumação simulada"), /* @__PURE__ */ React.createElement("div", { style: { ...S.badge, marginTop: 0, ...overall ? S.badgeOk : S.badgeWarn } }, overall ? "✓ Cabe tudo" : "⚠ Não cabe tudo")), /* @__PURE__ */ React.createElement(CargoIsoView, { van: currentVan, placed: pack.placed }), /* @__PURE__ */ React.createElement("div", { style: { ...S.ticketMeta, marginTop: 14 } }, /* @__PURE__ */ React.createElement("span", null, pack.placed.length, " caixa(s) colocadas"), pack.unplaced.length > 0 && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("span", { style: S.dot }, "•"), /* @__PURE__ */ React.createElement("span", { style: { color: "#D9705A" } }, pack.unplaced.length, " não coube/couberam")), weightRatio !== null && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("span", { style: S.dot }, "•"), /* @__PURE__ */ React.createElement("span", { style: { color: fitsByWeight ? "#5FAE7D" : "#D9705A" } }, "Peso: ", totalWeight, "kg (", (weightRatio * 100).toFixed(0), "% da capacidade)"))), /* @__PURE__ */ React.createElement("div", { style: S.hint }, "Simulação por empilhamento em camadas (com rotação automática por caixa) — arrumação real pode variar consoante fragilidade, empilhamento e forma de carregar.")));
+  })(), isNewView && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("div", { style: S.pageHeading }, "Novo pedido"), /* @__PURE__ */ React.createElement("div", { style: S.card }, /* @__PURE__ */ React.createElement("div", { style: S.cardLabel }, "Colar texto (WhatsApp)"), /* @__PURE__ */ React.createElement(
     "textarea",
     {
       style: S.textarea,
@@ -646,10 +824,10 @@ function DispatchDesk() {
         onChange: (e) => updateShipmentField(sh.id, "label", e.target.value),
         placeholder: "Dar nome a este pedido..."
       }
-    ), /* @__PURE__ */ React.createElement("button", { style: S.iconBtn, onClick: () => removeShipment(sh.id) }, "🗑 Remover")), /* @__PURE__ */ React.createElement("div", { style: S.route }, /* @__PURE__ */ React.createElement("span", { style: S.routeCode }, sh.pickupLoc || "?"), /* @__PURE__ */ React.createElement("span", { style: S.routeArrow }, "→"), /* @__PURE__ */ React.createElement("span", { style: S.routeCode }, sh.deliveryLoc || "?")), /* @__PURE__ */ React.createElement("div", { style: S.ticketMeta }, /* @__PURE__ */ React.createElement("span", null, sh.pickupTime || "sem hora de carga"), /* @__PURE__ */ React.createElement("span", { style: S.dot }, "•"), /* @__PURE__ */ React.createElement("span", null, sh.deliveryTime || "sem hora de entrega"), sh.cargo && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("span", { style: S.dot }, "•"), /* @__PURE__ */ React.createElement("span", null, sh.cargo))), sh.customs !== "unspecified" && /* @__PURE__ */ React.createElement("div", { style: { ...S.badge, ...sh.customs === "yes" ? S.badgeWarn : S.badgeOk } }, sh.customs === "yes" ? "Customs necessário" : "Sem customs"), /* @__PURE__ */ React.createElement("div", { className: "dd-grid", style: { marginTop: 24 } }, /* @__PURE__ */ React.createElement("div", { style: S.card }, /* @__PURE__ */ React.createElement("div", { style: S.cardLabel }, "Cotações"), sh.quotes.length > 0 && /* @__PURE__ */ React.createElement("div", { style: S.quoteList }, sh.quotes.slice().sort((a, b) => a.costPrice - b.costPrice).map((q) => /* @__PURE__ */ React.createElement("label", { key: q.id, style: { ...S.quoteRow, ...q.id === chosenId ? S.quoteRowActive : {} } }, /* @__PURE__ */ React.createElement("input", { type: "radio", name: `quote-${sh.id}`, checked: q.id === chosenId, onChange: () => setSelectedQuote({ ...selectedQuote, [sh.id]: q.id }), style: { marginRight: 8 } }), /* @__PURE__ */ React.createElement("div", { style: { flex: 1 } }, /* @__PURE__ */ React.createElement("div", { style: S.quoteSupplier }, q.supplier, q.id === best && /* @__PURE__ */ React.createElement("span", { style: S.bestTag }, "melhor preço")), (q.pickupTime || q.deliveryTime) && /* @__PURE__ */ React.createElement("div", { style: S.quoteNotes }, q.pickupTime && /* @__PURE__ */ React.createElement(React.Fragment, null, "carga: ", q.pickupTime), q.pickupTime && q.deliveryTime && " · ", q.deliveryTime && /* @__PURE__ */ React.createElement(React.Fragment, null, "entrega: ", q.deliveryTime))), /* @__PURE__ */ React.createElement("div", { style: S.quotePriceCol }, /* @__PURE__ */ React.createElement("div", { style: S.quotePrice }, "€", q.costPrice.toLocaleString("en-US")), /* @__PURE__ */ React.createElement("div", { style: S.quotePriceLabel }, "fornecedor"), q.sellPrice != null && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("div", { style: { ...S.quotePrice, color: "#5FAE7D" } }, "€", q.sellPrice.toLocaleString("en-US")), /* @__PURE__ */ React.createElement("div", { style: S.quotePriceLabel }, "cliente"))), /* @__PURE__ */ React.createElement("button", { style: S.iconBtnSmall, onClick: (e) => {
+    ), /* @__PURE__ */ React.createElement("button", { style: S.iconBtn, onClick: () => removeShipment(sh.id) }, "🗑 Remover")), /* @__PURE__ */ React.createElement("div", { style: S.card }, /* @__PURE__ */ React.createElement("div", { style: S.cardLabel }, "Detalhes do pedido"), /* @__PURE__ */ React.createElement("div", { style: { marginBottom: 16 } }, /* @__PURE__ */ React.createElement(Field, { label: "Nome do cliente (opcional)" }, /* @__PURE__ */ React.createElement("input", { style: S.input, value: sh.clientName, onChange: (e) => updateShipmentField(sh.id, "clientName", e.target.value), placeholder: "Client Name" }))), /* @__PURE__ */ React.createElement("div", { style: S.grid2 }, /* @__PURE__ */ React.createElement(Field, { label: "Local de carga" }, /* @__PURE__ */ React.createElement("input", { style: S.input, value: sh.pickupLoc, onChange: (e) => updateShipmentField(sh.id, "pickupLoc", e.target.value), placeholder: "FRA apt" })), /* @__PURE__ */ React.createElement(Field, { label: "Data / hora de carga" }, /* @__PURE__ */ React.createElement("input", { style: S.input, value: sh.pickupTime, onChange: (e) => updateShipmentField(sh.id, "pickupTime", e.target.value), placeholder: "ready this afternoon" })), /* @__PURE__ */ React.createElement(Field, { label: "Local de entrega" }, /* @__PURE__ */ React.createElement("input", { style: S.input, value: sh.deliveryLoc, onChange: (e) => updateShipmentField(sh.id, "deliveryLoc", e.target.value), placeholder: "NAP apt" })), /* @__PURE__ */ React.createElement(Field, { label: "Data / hora de entrega" }, /* @__PURE__ */ React.createElement("input", { style: S.input, value: sh.deliveryTime, onChange: (e) => updateShipmentField(sh.id, "deliveryTime", e.target.value), placeholder: "by Monday 17th Aug" })), /* @__PURE__ */ React.createElement(Field, { label: "Carga (dimensões / peso)" }, /* @__PURE__ */ React.createElement("input", { style: S.input, value: sh.cargo, onChange: (e) => updateShipmentField(sh.id, "cargo", e.target.value), placeholder: "1x 30x20x20cm, 0.60kg" })), /* @__PURE__ */ React.createElement(Field, { label: "Customs" }, /* @__PURE__ */ React.createElement("select", { style: S.input, value: sh.customs, onChange: (e) => updateShipmentField(sh.id, "customs", e.target.value) }, /* @__PURE__ */ React.createElement("option", { value: "unspecified" }, "Por confirmar"), /* @__PURE__ */ React.createElement("option", { value: "yes" }, "Necessário"), /* @__PURE__ */ React.createElement("option", { value: "no" }, "Não necessário"))))), /* @__PURE__ */ React.createElement("div", { className: "dd-grid", style: { marginTop: 24 } }, /* @__PURE__ */ React.createElement("div", { style: S.card }, /* @__PURE__ */ React.createElement("div", { style: S.cardLabel }, "Cotações"), sh.quotes.length > 0 && /* @__PURE__ */ React.createElement("div", { style: S.quoteList }, sh.quotes.slice().sort((a, b) => a.costPrice - b.costPrice).map((q) => /* @__PURE__ */ React.createElement("label", { key: q.id, style: { ...S.quoteRow, ...q.id === chosenId ? S.quoteRowActive : {} } }, /* @__PURE__ */ React.createElement("input", { type: "radio", name: `quote-${sh.id}`, checked: q.id === chosenId, onChange: () => setSelectedQuote({ ...selectedQuote, [sh.id]: q.id }), style: { marginRight: 8 } }), /* @__PURE__ */ React.createElement("div", { style: { flex: 1 } }, /* @__PURE__ */ React.createElement("div", { style: S.quoteSupplier }, q.supplier, q.id === best && /* @__PURE__ */ React.createElement("span", { style: S.bestTag }, "melhor preço")), (q.pickupTime || q.deliveryTime) && /* @__PURE__ */ React.createElement("div", { style: S.quoteNotes }, q.pickupTime && /* @__PURE__ */ React.createElement(React.Fragment, null, "carga: ", q.pickupTime), q.pickupTime && q.deliveryTime && " · ", q.deliveryTime && /* @__PURE__ */ React.createElement(React.Fragment, null, "entrega: ", q.deliveryTime))), /* @__PURE__ */ React.createElement("div", { style: S.quotePriceCol }, /* @__PURE__ */ React.createElement("div", { style: S.quotePrice }, "€", q.costPrice.toLocaleString("en-US")), /* @__PURE__ */ React.createElement("div", { style: S.quotePriceLabel }, "fornecedor"), q.sellPrice != null && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("div", { style: { ...S.quotePrice, color: "#5FAE7D" } }, "€", q.sellPrice.toLocaleString("en-US")), /* @__PURE__ */ React.createElement("div", { style: S.quotePriceLabel }, "cliente"))), /* @__PURE__ */ React.createElement("button", { style: S.iconBtnSmall, onClick: (e) => {
       e.preventDefault();
       removeQuote(sh.id, q.id);
-    } }, "🗑")))), /* @__PURE__ */ React.createElement("div", { style: S.addQuoteGrid }, /* @__PURE__ */ React.createElement("input", { style: S.input, placeholder: "Fornecedor", value: draft.supplier, onChange: (e) => updateQuoteDraft(sh.id, "supplier", e.target.value) }), /* @__PURE__ */ React.createElement("input", { style: S.input, placeholder: "Quando carrega", value: draft.pickupTime, onChange: (e) => updateQuoteDraft(sh.id, "pickupTime", e.target.value) }), /* @__PURE__ */ React.createElement("input", { style: S.input, placeholder: "Quando entrega", value: draft.deliveryTime, onChange: (e) => updateQuoteDraft(sh.id, "deliveryTime", e.target.value) }), /* @__PURE__ */ React.createElement("input", { style: S.input, placeholder: "Preço fornecedor (€)", type: "number", value: draft.costPrice, onChange: (e) => updateQuoteDraft(sh.id, "costPrice", e.target.value) }), /* @__PURE__ */ React.createElement("input", { style: S.input, placeholder: "Preço ao cliente (€)", type: "number", value: draft.sellPrice, onChange: (e) => updateQuoteDraft(sh.id, "sellPrice", e.target.value) }), /* @__PURE__ */ React.createElement("button", { style: S.secondaryBtn, onClick: () => addQuote(sh.id) }, "+ Adicionar")), sh.quotes.length > 0 && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("div", { style: S.divider }), /* @__PURE__ */ React.createElement(Field, { label: "Nome do cliente (opcional)" }, /* @__PURE__ */ React.createElement("input", { style: S.input, value: sh.clientName, onChange: (e) => updateShipmentField(sh.id, "clientName", e.target.value), placeholder: "Client Name" })))), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 24 } }, /* @__PURE__ */ React.createElement("div", { style: S.card }, /* @__PURE__ */ React.createElement("div", { style: S.rowBetween }, /* @__PURE__ */ React.createElement("div", { style: S.cardLabel }, "Mensagem para fornecedores"), /* @__PURE__ */ React.createElement(
+    } }, "🗑")))), /* @__PURE__ */ React.createElement("div", { style: S.addQuoteGrid }, /* @__PURE__ */ React.createElement("input", { style: S.input, placeholder: "Fornecedor", value: draft.supplier, onChange: (e) => updateQuoteDraft(sh.id, "supplier", e.target.value) }), /* @__PURE__ */ React.createElement("input", { style: S.input, placeholder: "Quando carrega", value: draft.pickupTime, onChange: (e) => updateQuoteDraft(sh.id, "pickupTime", e.target.value) }), /* @__PURE__ */ React.createElement("input", { style: S.input, placeholder: "Quando entrega", value: draft.deliveryTime, onChange: (e) => updateQuoteDraft(sh.id, "deliveryTime", e.target.value) }), /* @__PURE__ */ React.createElement("input", { style: S.input, placeholder: "Preço fornecedor (€)", type: "number", value: draft.costPrice, onChange: (e) => updateQuoteDraft(sh.id, "costPrice", e.target.value) }), /* @__PURE__ */ React.createElement("input", { style: S.input, placeholder: "Preço ao cliente (€)", type: "number", value: draft.sellPrice, onChange: (e) => updateQuoteDraft(sh.id, "sellPrice", e.target.value) }), /* @__PURE__ */ React.createElement("button", { style: S.secondaryBtn, onClick: () => addQuote(sh.id) }, "+ Adicionar"))), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 24 } }, /* @__PURE__ */ React.createElement("div", { style: S.card }, /* @__PURE__ */ React.createElement("div", { style: S.rowBetween }, /* @__PURE__ */ React.createElement("div", { style: S.cardLabel }, "Mensagem para fornecedores"), /* @__PURE__ */ React.createElement(
       LangToggle,
       {
         value: supplierLangByShipment[sh.id] || "pt",
