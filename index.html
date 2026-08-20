@@ -14,6 +14,10 @@
   @media (max-width: 760px) {
     #root > div { flex-direction: column !important; }
   }
+  @media print {
+    .dd-sidebar-noprint { display: none !important; }
+    body, html { background: #ffffff !important; }
+  }
 </style>
 </head>
 <body>
@@ -611,6 +615,29 @@ function bestQuoteId(sh) {
   if (!sh.quotes.length) return null;
   return sh.quotes.reduce((min, q) => q.costPrice < min.costPrice ? q : min, sh.quotes[0]).id;
 }
+function buildFullSummary(shipments) {
+  if (shipments.length === 0) return "Sem pedidos ativos.";
+  return shipments.map((sh, i) => {
+    const lines = [];
+    lines.push(`${i + 1}. ${sh.label.trim() || `${sh.pickupLoc || "?"} → ${sh.deliveryLoc || "?"}`}`);
+    lines.push(`   Carga: ${sh.pickupLoc || "-"}${sh.pickupTime ? " - " + sh.pickupTime : ""}`);
+    lines.push(`   Entrega: ${sh.deliveryLoc || "-"}${sh.deliveryTime ? " - " + sh.deliveryTime : ""}`);
+    if (sh.cargo.trim()) lines.push(`   Carga (dimensões/peso): ${sh.cargo.trim()}`);
+    if (sh.customs === "yes") lines.push(`   Customs: Necessário`);
+    else if (sh.customs === "no") lines.push(`   Customs: Não necessário`);
+    if (sh.clientName.trim()) lines.push(`   Cliente: ${sh.clientName.trim()}`);
+    if (sh.quotes.length > 0) {
+      lines.push(`   Cotações:`);
+      sh.quotes.slice().sort((a, b) => a.costPrice - b.costPrice).forEach((q) => {
+        const timing = q.pickupTime || q.deliveryTime ? ` [carrega: ${q.pickupTime || "-"} · entrega: ${q.deliveryTime || "-"}]` : "";
+        lines.push(`     - ${q.supplier}: €${q.costPrice.toLocaleString("en-US")}${q.sellPrice != null ? ` (cliente: €${q.sellPrice.toLocaleString("en-US")})` : ""}${timing}`);
+      });
+    } else {
+      lines.push(`   Sem cotações ainda`);
+    }
+    return lines.join("\n");
+  }).join("\n\n");
+}
 function Field({ label, children }) {
   return /* @__PURE__ */ React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 6 } }, /* @__PURE__ */ React.createElement("label", { style: S.fieldLabel }, label), children);
 }
@@ -769,8 +796,9 @@ function DispatchDesk() {
     setShipments((list) => list.map((sh) => sh.id === id ? { ...sh, [field]: value } : sh));
   }
   const isCalculatorView = activeTabId === "calculator";
-  const isNewView = !isCalculatorView && (activeTabId === "new" || !shipments.some((sh) => sh.id === activeTabId));
-  return /* @__PURE__ */ React.createElement("div", { style: S.shell }, /* @__PURE__ */ React.createElement("div", { style: S.sidebar }, /* @__PURE__ */ React.createElement("div", { style: S.sidebarHeader }, /* @__PURE__ */ React.createElement("div", { style: S.headerIcon }, "✈️"), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { style: S.title }, "Dispatch Desk"), /* @__PURE__ */ React.createElement("div", { style: S.subtitle }, "gestão de transportes"))), /* @__PURE__ */ React.createElement("button", { style: { ...S.primaryBtn, marginBottom: 10 }, onClick: () => setActiveTabId("new") }, "+ Novo pedido"), /* @__PURE__ */ React.createElement("button", { style: { ...S.secondaryBtnWide, marginBottom: 18, ...isCalculatorView ? { background: "#E8A33D", color: "#0E1013" } : {} }, onClick: () => setActiveTabId("calculator") }, "📐 Calculadora de Carga"), /* @__PURE__ */ React.createElement("div", { style: S.navList }, shipments.length === 0 && /* @__PURE__ */ React.createElement("div", { style: S.navEmpty }, "Sem pedidos ainda"), shipments.map((sh) => {
+  const isSummaryView = activeTabId === "summary";
+  const isNewView = !isCalculatorView && !isSummaryView && (activeTabId === "new" || !shipments.some((sh) => sh.id === activeTabId));
+  return /* @__PURE__ */ React.createElement("div", { style: S.shell }, /* @__PURE__ */ React.createElement("div", { style: S.sidebar, className: "dd-sidebar-noprint" }, /* @__PURE__ */ React.createElement("div", { style: S.sidebarHeader }, /* @__PURE__ */ React.createElement("div", { style: S.headerIcon }, "✈️"), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { style: S.title }, "Dispatch Desk"), /* @__PURE__ */ React.createElement("div", { style: S.subtitle }, "gestão de transportes"))), /* @__PURE__ */ React.createElement("button", { style: { ...S.primaryBtn, marginBottom: 10 }, onClick: () => setActiveTabId("new") }, "+ Novo pedido"), /* @__PURE__ */ React.createElement("button", { style: { ...S.secondaryBtnWide, marginBottom: 10, ...isCalculatorView ? { background: "#E8A33D", color: "#0E1013" } : {} }, onClick: () => setActiveTabId("calculator") }, "📐 Calculadora de Carga"), /* @__PURE__ */ React.createElement("button", { style: { ...S.secondaryBtnWide, marginBottom: 18, ...isSummaryView ? { background: "#E8A33D", color: "#0E1013" } : {} }, onClick: () => setActiveTabId("summary") }, "📋 Resumo"), /* @__PURE__ */ React.createElement("div", { style: S.navList }, shipments.length === 0 && /* @__PURE__ */ React.createElement("div", { style: S.navEmpty }, "Sem pedidos ainda"), shipments.map((sh) => {
     const isActive = sh.id === activeTabId;
     return /* @__PURE__ */ React.createElement("div", { key: sh.id, style: { ...S.navItem, ...isActive ? S.navItemActive : {} }, onClick: () => setActiveTabId(sh.id) }, /* @__PURE__ */ React.createElement("div", { style: { flex: 1, minWidth: 0 } }, /* @__PURE__ */ React.createElement("div", { style: S.navItemLabel }, sh.label.trim() ? sh.label.trim() : `${sh.pickupLoc || "?"} → ${sh.deliveryLoc || "?"}`), /* @__PURE__ */ React.createElement("div", { style: S.navItemSub }, sh.pickupLoc || "?", " → ", sh.deliveryLoc || "?")), /* @__PURE__ */ React.createElement("button", { style: S.tabClose, onClick: (e) => {
       e.stopPropagation();
@@ -779,7 +807,9 @@ function DispatchDesk() {
   })), /* @__PURE__ */ React.createElement("button", { style: S.settingsBtnWide, onClick: () => {
     setApiKeyInput(apiKey);
     setShowSettings((s) => !s);
-  } }, "⚙️ Definições")), /* @__PURE__ */ React.createElement("div", { style: S.main }, /* @__PURE__ */ React.createElement("div", { style: S.mainInner }, showSettings && /* @__PURE__ */ React.createElement("div", { style: S.card }, /* @__PURE__ */ React.createElement("div", { style: S.cardLabel }, "Tradução automática (opcional)"), /* @__PURE__ */ React.createElement("div", { style: S.hint }, "Para traduzir automaticamente o texto que escreves (não só os rótulos), cola aqui a tua chave da API da Anthropic. Fica guardada só neste browser. Sem chave, os botões PT/EN continuam a trocar o modelo da mensagem, mas o texto que escreveste mantém-se como o inseriste."), /* @__PURE__ */ React.createElement("input", { style: { ...S.input, marginTop: 10, marginBottom: 10 }, type: "password", placeholder: "sk-ant-...", value: apiKeyInput, onChange: (e) => setApiKeyInput(e.target.value) }), /* @__PURE__ */ React.createElement("button", { style: S.primaryBtn, onClick: saveApiKey }, "Guardar chave")), isCalculatorView && (() => {
+  } }, "⚙️ Definições")), /* @__PURE__ */ React.createElement("div", { style: S.main }, /* @__PURE__ */ React.createElement("div", { style: S.mainInner }, showSettings && /* @__PURE__ */ React.createElement("div", { style: S.card }, /* @__PURE__ */ React.createElement("div", { style: S.cardLabel }, "Tradução automática (opcional)"), /* @__PURE__ */ React.createElement("div", { style: S.hint }, "Para traduzir automaticamente o texto que escreves (não só os rótulos), cola aqui a tua chave da API da Anthropic. Fica guardada só neste browser. Sem chave, os botões PT/EN continuam a trocar o modelo da mensagem, mas o texto que escreveste mantém-se como o inseriste."), /* @__PURE__ */ React.createElement("input", { style: { ...S.input, marginTop: 10, marginBottom: 10 }, type: "password", placeholder: "sk-ant-...", value: apiKeyInput, onChange: (e) => setApiKeyInput(e.target.value) }), /* @__PURE__ */ React.createElement("button", { style: S.primaryBtn, onClick: saveApiKey }, "Guardar chave")), isSummaryView && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("div", { style: S.pageHeading }, "Resumo dos pedidos"), /* @__PURE__ */ React.createElement("div", { style: S.card }, /* @__PURE__ */ React.createElement("div", { style: S.rowBetween }, /* @__PURE__ */ React.createElement("div", { style: S.cardLabel }, "Todos os pedidos ativos"), /* @__PURE__ */ React.createElement("button", { style: { ...S.iconBtn }, onClick: () => window.print() }, "🖨️ Imprimir / PDF")), /* @__PURE__ */ React.createElement("pre", { style: S.emailBox }, buildFullSummary(shipments)), /* @__PURE__ */ React.createElement(CopyBtn, { text: buildFullSummary(shipments), label: "Copiar resumo completo" })), shipments.map((sh) => {
+    return /* @__PURE__ */ React.createElement("div", { key: sh.id, style: S.card }, /* @__PURE__ */ React.createElement("div", { style: S.cardLabel }, sh.label.trim() || `${sh.pickupLoc || "?"} → ${sh.deliveryLoc || "?"}`), /* @__PURE__ */ React.createElement("div", { style: S.ticketMeta }, /* @__PURE__ */ React.createElement("span", null, sh.pickupLoc || "?", " → ", sh.deliveryLoc || "?"), /* @__PURE__ */ React.createElement("span", { style: S.dot }, "•"), /* @__PURE__ */ React.createElement("span", null, sh.pickupTime || "sem hora de carga"), /* @__PURE__ */ React.createElement("span", { style: S.dot }, "•"), /* @__PURE__ */ React.createElement("span", null, sh.deliveryTime || "sem hora de entrega")), sh.cargo && /* @__PURE__ */ React.createElement("div", { style: { ...S.ticketMeta, marginTop: 4 } }, /* @__PURE__ */ React.createElement("span", null, sh.cargo)), sh.customs !== "unspecified" && /* @__PURE__ */ React.createElement("div", { style: { ...S.badge, ...sh.customs === "yes" ? S.badgeWarn : S.badgeOk } }, sh.customs === "yes" ? "Customs necessário" : "Sem customs"), /* @__PURE__ */ React.createElement("div", { style: S.divider }), sh.quotes.length > 0 ? /* @__PURE__ */ React.createElement("div", { style: S.quoteList }, sh.quotes.slice().sort((a, b) => a.costPrice - b.costPrice).map((q) => /* @__PURE__ */ React.createElement("div", { key: q.id, style: { ...S.quoteRow, cursor: "default" } }, /* @__PURE__ */ React.createElement("div", { style: { flex: 1 } }, /* @__PURE__ */ React.createElement("div", { style: S.quoteSupplier }, q.supplier), (q.pickupTime || q.deliveryTime) && /* @__PURE__ */ React.createElement("div", { style: S.quoteNotes }, q.pickupTime && /* @__PURE__ */ React.createElement(React.Fragment, null, "carga: ", q.pickupTime), q.pickupTime && q.deliveryTime && " · ", q.deliveryTime && /* @__PURE__ */ React.createElement(React.Fragment, null, "entrega: ", q.deliveryTime)), sh.clientName.trim() && /* @__PURE__ */ React.createElement("div", { style: S.quoteNotes }, "Cliente: ", sh.clientName.trim())), /* @__PURE__ */ React.createElement("div", { style: S.quotePriceCol }, /* @__PURE__ */ React.createElement("div", { style: S.quotePrice }, "€", q.costPrice.toLocaleString("en-US")), /* @__PURE__ */ React.createElement("div", { style: S.quotePriceLabel }, "fornecedor"), q.sellPrice != null && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("div", { style: { ...S.quotePrice, color: "#5FAE7D" } }, "€", q.sellPrice.toLocaleString("en-US")), /* @__PURE__ */ React.createElement("div", { style: S.quotePriceLabel }, "cliente")))))) : /* @__PURE__ */ React.createElement("div", { style: S.hint }, "Sem cotações ainda."));
+  }), shipments.length === 0 && /* @__PURE__ */ React.createElement("div", { style: S.empty }, "Ainda sem pedidos para mostrar no resumo.")), isCalculatorView && (() => {
     const hasVan = currentVan.length && currentVan.width && currentVan.height;
     const pack = hasVan && cargoItems.length > 0 ? packBoxes(currentVan, cargoItems) : { placed: [], unplaced: [] };
     const vCapacity = parseFloat(currentVan.capacity) || 0;
