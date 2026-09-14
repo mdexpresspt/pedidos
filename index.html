@@ -350,6 +350,7 @@ const API_KEY_STORAGE = "dispatch-desk-api-key-v1";
 const VAN_STORAGE = "dispatch-desk-vans-v1";
 const EMAIL_LISTS_STORAGE = "dispatch-desk-email-lists-v1";
 const DELETED_STORAGE = "dispatch-desk-deleted-v1";
+const DASHBOARD_METRICS_STORAGE = "dispatch-desk-dashboard-metrics-v1";
 const emptyShipment = () => ({
   id: uid(),
   label: "",
@@ -709,6 +710,11 @@ function HistoryView({ deletedShipments, restoreShipment, purgeDeletedShipment }
             e("button", { style: S.iconBtn, onClick: () => purgeDeletedShipment(sh.id) }, "🗑 Eliminar definitivamente")
           )
         ),
+        sh.outcome === "accepted"
+          ? e("div", { style: { ...S.badge, ...S.badgeOk, marginTop: 0, marginBottom: 12 } }, "✓ Serviço aceite")
+          : sh.outcome === "rejected"
+          ? e("div", { style: { ...S.badge, ...S.badgeWarn, marginTop: 0, marginBottom: 12 } }, "✕ Serviço não aceite")
+          : null,
         e("div", { style: S.ticketMeta },
           e("span", null, `${sh.pickupLoc || "?"} → ${sh.deliveryLoc || "?"}`),
           e("span", { style: S.dot }, "•"),
@@ -738,6 +744,105 @@ function CopyBtn({ text, label }) {
 }
 function LangToggle({ value, onChange }) {
   return /* @__PURE__ */ React.createElement("div", { style: S.langToggle }, /* @__PURE__ */ React.createElement("button", { style: { ...S.langBtn, ...value === "pt" ? S.langBtnActive : {} }, onClick: () => onChange("pt") }, "PT"), /* @__PURE__ */ React.createElement("button", { style: { ...S.langBtn, ...value === "en" ? S.langBtnActive : {} }, onClick: () => onChange("en") }, "EN"));
+}
+function ConfirmDeleteModal({ onAccepted, onRejected, onCancel }) {
+  const e = React.createElement;
+  return e("div", { style: S.modalOverlay, onClick: onCancel },
+    e("div", { style: S.modalCard, onClick: (ev) => ev.stopPropagation() },
+      e("div", { style: S.cardLabel }, "Eliminar pedido"),
+      e("div", { style: { ...S.hint, marginTop: 0, marginBottom: 18 } }, "Antes de mover este pedido para o histórico, indica o resultado:"),
+      e("div", { style: { display: "flex", flexDirection: "column", gap: 10 } },
+        e("button", { style: S.primaryBtn, onClick: onAccepted }, "✓ Serviço aceite"),
+        e("button", { style: S.secondaryBtnWide, onClick: onRejected }, "✕ Serviço não aceite")
+      ),
+      e("button", { style: { ...S.iconBtn, marginTop: 14, width: "100%" }, onClick: onCancel }, "Cancelar")
+    )
+  );
+}
+function computeDashboardMetrics(shipments, deletedShipments) {
+  const all = [...shipments, ...deletedShipments];
+  const accepted = deletedShipments.filter((sh) => sh.outcome === "accepted");
+  const rejected = deletedShipments.filter((sh) => sh.outcome === "rejected");
+  const decided = accepted.length + rejected.length;
+  const allQuotes = all.flatMap((sh) => sh.quotes || []);
+  const costPrices = allQuotes.map((q) => q.costPrice).filter((n) => typeof n === "number" && !isNaN(n));
+  const sellPrices = allQuotes.filter((q) => q.sellPrice != null).map((q) => q.sellPrice);
+  const margins = allQuotes.filter((q) => q.sellPrice != null).map((q) => q.sellPrice - q.costPrice);
+  const avg = (arr) => arr.length ? arr.reduce((a, b) => a + b, 0) / arr.length : null;
+  const clientNames = new Set(all.map((sh) => sh.clientName && sh.clientName.trim()).filter(Boolean));
+  const routeCounts = {};
+  all.forEach((sh) => {
+    if (sh.pickupLoc || sh.deliveryLoc) {
+      const key = `${sh.pickupLoc || "?"} → ${sh.deliveryLoc || "?"}`;
+      routeCounts[key] = (routeCounts[key] || 0) + 1;
+    }
+  });
+  const topRoutes = Object.entries(routeCounts).sort((a, b) => b[1] - a[1]).slice(0, 5);
+  const supplierCounts = {};
+  allQuotes.forEach((q) => {
+    if (q.supplier) supplierCounts[q.supplier] = (supplierCounts[q.supplier] || 0) + 1;
+  });
+  const topSuppliers = Object.entries(supplierCounts).sort((a, b) => b[1] - a[1]).slice(0, 5);
+  const customsCounts = { yes: 0, no: 0, unspecified: 0 };
+  all.forEach((sh) => {
+    const c = sh.customs || "unspecified";
+    customsCounts[c] = (customsCounts[c] || 0) + 1;
+  });
+  const withoutQuotes = all.filter((sh) => !sh.quotes || sh.quotes.length === 0).length;
+  return [
+    { key: "total", label: "Total de pedidos", value: all.length },
+    { key: "active", label: "Pedidos ativos", value: shipments.length },
+    { key: "history", label: "Pedidos no histórico", value: deletedShipments.length },
+    { key: "accepted", label: "Serviços aceites", value: accepted.length },
+    { key: "rejected", label: "Serviços não aceites", value: rejected.length },
+    { key: "acceptRate", label: "Taxa de aceitação", value: decided ? `${((accepted.length / decided) * 100).toFixed(0)}%` : "—", hint: decided ? `${accepted.length} de ${decided} pedidos decididos` : "Sem pedidos decididos ainda" },
+    { key: "totalQuotes", label: "Total de cotações recebidas", value: allQuotes.length },
+    { key: "avgQuotesPerShipment", label: "Média de cotações por pedido", value: all.length ? (allQuotes.length / all.length).toFixed(1) : "0" },
+    { key: "noQuotes", label: "Pedidos sem cotações", value: withoutQuotes },
+    { key: "avgCost", label: "Preço médio de compra (fornecedor)", value: avg(costPrices) != null ? `€${avg(costPrices).toFixed(2)}` : "—" },
+    { key: "avgSell", label: "Preço médio de venda (cliente)", value: avg(sellPrices) != null ? `€${avg(sellPrices).toFixed(2)}` : "—" },
+    { key: "avgMargin", label: "Margem média por cotação", value: avg(margins) != null ? `€${avg(margins).toFixed(2)}` : "—" },
+    { key: "totalMargin", label: "Margem total estimada", value: margins.length ? `€${margins.reduce((a, b) => a + b, 0).toFixed(2)}` : "—" },
+    { key: "uniqueClients", label: "Clientes únicos", value: clientNames.size },
+    { key: "customsYes", label: "Pedidos com customs necessário", value: customsCounts.yes },
+    { key: "customsNo", label: "Pedidos sem customs", value: customsCounts.no },
+    { key: "customsUnspecified", label: "Customs por confirmar", value: customsCounts.unspecified },
+    { key: "topRoutes", label: "Rotas mais frequentes", value: topRoutes.length ? topRoutes.map(([r, c]) => `${r} (${c})`).join("  ·  ") : "—", wide: true },
+    { key: "topSuppliers", label: "Fornecedores mais cotados", value: topSuppliers.length ? topSuppliers.map(([s2, c]) => `${s2} (${c})`).join("  ·  ") : "—", wide: true }
+  ];
+}
+function MetricsDashboard({ shipments, deletedShipments, visibleMetrics, setVisibleMetrics }) {
+  const e = React.createElement;
+  const metrics = computeDashboardMetrics(shipments, deletedShipments);
+  const isVisible = (key) => !visibleMetrics || visibleMetrics[key] !== false;
+  function toggle(key) {
+    setVisibleMetrics((prev) => {
+      const base = prev || {};
+      const current = base[key] !== false;
+      return { ...base, [key]: !current };
+    });
+  }
+  const shown = metrics.filter((m) => isVisible(m.key));
+  return e(React.Fragment, null,
+    e("div", { style: S.pageHeading }, "Dashboard"),
+    e("div", { style: { ...S.hint, marginTop: 0 } }, "Clica numa métrica para a mostrar ou esconder no dashboard."),
+    e("div", { style: { display: "flex", flexWrap: "wrap", gap: 8, margin: "14px 0 24px" } },
+      metrics.map((m) => e("button", {
+        key: m.key,
+        style: isVisible(m.key) ? { ...S.iconBtn, background: "#E8A33D", color: "#0E1013", border: "1px solid #E8A33D" } : S.iconBtn,
+        onClick: () => toggle(m.key)
+      }, m.label))
+    ),
+    shown.length === 0
+      ? e("div", { style: S.empty }, "Nenhuma métrica selecionada. Clica numa das opções acima para a mostrar.")
+      : e("div", { className: "dd-grid" },
+          shown.map((m) => e("div", { key: m.key, style: { ...S.card, ...(m.wide ? { gridColumn: "1 / -1" } : {}) } },
+            e("div", { style: S.cardLabel }, m.label),
+            e("div", { style: { fontSize: m.wide ? 16 : 28, fontWeight: 700, fontFamily: m.wide ? sans : mono, color: "#EDEBE6", lineHeight: 1.4 } }, m.value),
+            m.hint ? e("div", { style: { ...S.hint, marginTop: 8 } }, m.hint) : null
+          ))
+        )
+  );
 }
 function DispatchDesk() {
   var _a;
@@ -792,6 +897,17 @@ function DispatchDesk() {
   const [newListName, setNewListName] = useState("");
   const [newListEmailsText, setNewListEmailsText] = useState("");
   const [selectedEmailListByShipment, setSelectedEmailListByShipment] = useState({});
+  const [pendingDeleteId, setPendingDeleteId] = useState(null);
+  const [visibleMetrics, setVisibleMetrics] = useState(() => {
+    try {
+      return JSON.parse(localStorage.getItem(DASHBOARD_METRICS_STORAGE)) || null;
+    } catch (e) {
+      return null;
+    }
+  });
+  useEffect(() => {
+    if (visibleMetrics) localStorage.setItem(DASHBOARD_METRICS_STORAGE, JSON.stringify(visibleMetrics));
+  }, [visibleMetrics]);
   useEffect(() => {
     localStorage.setItem(EMAIL_LISTS_STORAGE, JSON.stringify(emailLists));
   }, [emailLists]);
@@ -882,14 +998,24 @@ function DispatchDesk() {
     setForm(emptyShipment());
     setPasteText("");
   }
-  function removeShipment(id) {
+  function removeShipment(id, outcome) {
     setShipments((s) => {
       const removed = s.find((sh) => sh.id === id);
-      if (removed) setDeletedShipments((d) => [{ ...removed, deletedAt: Date.now() }, ...d]);
+      if (removed) setDeletedShipments((d) => [{ ...removed, deletedAt: Date.now(), outcome: outcome || null }, ...d]);
       const next = s.filter((sh) => sh.id !== id);
       if (activeTabId === id) setActiveTabId(next.length ? next[0].id : "new");
       return next;
     });
+    setPendingDeleteId(null);
+  }
+  function requestDeleteShipment(id) {
+    setPendingDeleteId(id);
+  }
+  function cancelDeleteShipment() {
+    setPendingDeleteId(null);
+  }
+  function confirmDeleteShipment(outcome) {
+    if (pendingDeleteId) removeShipment(pendingDeleteId, outcome);
   }
   function restoreShipment(id) {
     setDeletedShipments((d) => {
@@ -938,19 +1064,20 @@ function DispatchDesk() {
   const isSummaryView = activeTabId === "summary";
   const isEmailListsView = activeTabId === "emaillists";
   const isHistoryView = activeTabId === "history";
-  const isNewView = !isCalculatorView && !isSummaryView && !isEmailListsView && !isHistoryView && (activeTabId === "new" || !shipments.some((sh) => sh.id === activeTabId));
-  return /* @__PURE__ */ React.createElement("div", { style: S.shell }, /* @__PURE__ */ React.createElement("div", { style: S.sidebar, className: "dd-sidebar-noprint" }, /* @__PURE__ */ React.createElement("div", { style: S.sidebarHeader }, /* @__PURE__ */ React.createElement("div", { style: S.headerIcon }, "✈️"), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { style: S.title }, "Dispatch Desk"), /* @__PURE__ */ React.createElement("div", { style: S.subtitle }, "gestão de transportes"))), /* @__PURE__ */ React.createElement("button", { style: { ...S.primaryBtn, marginBottom: 10 }, onClick: () => setActiveTabId("new") }, "+ Novo pedido"), /* @__PURE__ */ React.createElement("button", { style: { ...S.secondaryBtnWide, marginBottom: 10, ...isCalculatorView ? { background: "#E8A33D", color: "#0E1013" } : {} }, onClick: () => setActiveTabId("calculator") }, "📐 Calculadora de Carga"), /* @__PURE__ */ React.createElement("button", { style: { ...S.secondaryBtnWide, marginBottom: 18, ...isSummaryView ? { background: "#E8A33D", color: "#0E1013" } : {} }, onClick: () => setActiveTabId("summary") }, "📋 Resumo"), /* @__PURE__ */ React.createElement("button", { style: { ...S.secondaryBtnWide, marginBottom: 18, ...isEmailListsView ? { background: "#E8A33D", color: "#0E1013" } : {} }, onClick: () => setActiveTabId("emaillists") }, "✉️ Listas de Email"), /* @__PURE__ */ React.createElement("button", { style: { ...S.secondaryBtnWide, marginBottom: 18, ...isHistoryView ? { background: "#E8A33D", color: "#0E1013" } : {} }, onClick: () => setActiveTabId("history") }, "🗄️ Histórico"), /* @__PURE__ */ React.createElement("div", { style: S.navList }, shipments.length === 0 && /* @__PURE__ */ React.createElement("div", { style: S.navEmpty }, "Sem pedidos ainda"), shipments.map((sh) => {
+  const isDashboardView = activeTabId === "dashboard";
+  const isNewView = !isCalculatorView && !isSummaryView && !isEmailListsView && !isHistoryView && !isDashboardView && (activeTabId === "new" || !shipments.some((sh) => sh.id === activeTabId));
+  return /* @__PURE__ */ React.createElement("div", { style: S.shell }, /* @__PURE__ */ React.createElement("div", { style: S.sidebar, className: "dd-sidebar-noprint" }, /* @__PURE__ */ React.createElement("div", { style: S.sidebarHeader }, /* @__PURE__ */ React.createElement("div", { style: S.headerIcon }, "✈️"), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { style: S.title }, "Dispatch Desk"), /* @__PURE__ */ React.createElement("div", { style: S.subtitle }, "gestão de transportes"))), /* @__PURE__ */ React.createElement("button", { style: { ...S.primaryBtn, marginBottom: 10 }, onClick: () => setActiveTabId("new") }, "+ Novo pedido"), /* @__PURE__ */ React.createElement("button", { style: { ...S.navBtn, marginBottom: 4, ...isCalculatorView ? S.navBtnActive : {} }, onClick: () => setActiveTabId("calculator") }, "📐 Calculadora de Carga"), /* @__PURE__ */ React.createElement("button", { style: { ...S.navBtn, marginBottom: 4, ...isSummaryView ? S.navBtnActive : {} }, onClick: () => setActiveTabId("summary") }, "📋 Resumo"), /* @__PURE__ */ React.createElement("button", { style: { ...S.navBtn, marginBottom: 4, ...isEmailListsView ? S.navBtnActive : {} }, onClick: () => setActiveTabId("emaillists") }, "✉️ Listas de Email"), /* @__PURE__ */ React.createElement("button", { style: { ...S.navBtn, marginBottom: 4, ...isHistoryView ? S.navBtnActive : {} }, onClick: () => setActiveTabId("history") }, "🗄️ Histórico"), /* @__PURE__ */ React.createElement("button", { style: { ...S.navBtn, marginBottom: 14, ...isDashboardView ? S.navBtnActive : {} }, onClick: () => setActiveTabId("dashboard") }, "📊 Dashboard"), /* @__PURE__ */ React.createElement("div", { style: S.navList }, shipments.length === 0 && /* @__PURE__ */ React.createElement("div", { style: S.navEmpty }, "Sem pedidos ainda"), shipments.map((sh) => {
     const isActive = sh.id === activeTabId;
     return /* @__PURE__ */ React.createElement("div", { key: sh.id, style: { ...S.navItem, ...isActive ? S.navItemActive : {} }, onClick: () => setActiveTabId(sh.id) }, /* @__PURE__ */ React.createElement("div", { style: { flex: 1, minWidth: 0 } }, /* @__PURE__ */ React.createElement("div", { style: S.navItemLabel }, sh.label.trim() ? sh.label.trim() : `${sh.pickupLoc || "?"} → ${sh.deliveryLoc || "?"}`), /* @__PURE__ */ React.createElement("div", { style: S.navItemSub }, sh.pickupLoc || "?", " → ", sh.deliveryLoc || "?")), /* @__PURE__ */ React.createElement("button", { style: S.tabClose, onClick: (e) => {
       e.stopPropagation();
-      removeShipment(sh.id);
+      requestDeleteShipment(sh.id);
     } }, "✕"));
   })), /* @__PURE__ */ React.createElement("button", { style: S.settingsBtnWide, onClick: () => {
     setApiKeyInput(apiKey);
     setShowSettings((s) => !s);
   } }, "⚙️ Definições")), /* @__PURE__ */ React.createElement("div", { style: S.main }, /* @__PURE__ */ React.createElement("div", { style: S.mainInner }, showSettings && /* @__PURE__ */ React.createElement("div", { style: S.card }, /* @__PURE__ */ React.createElement("div", { style: S.cardLabel }, "Tradução automática (opcional)"), /* @__PURE__ */ React.createElement("div", { style: S.hint }, "Para traduzir automaticamente o texto que escreves (não só os rótulos), cola aqui a tua chave da API da Anthropic. Fica guardada só neste browser. Sem chave, os botões PT/EN continuam a trocar o modelo da mensagem, mas o texto que escreveste mantém-se como o inseriste."), /* @__PURE__ */ React.createElement("input", { style: { ...S.input, marginTop: 10, marginBottom: 10 }, type: "password", placeholder: "sk-ant-...", value: apiKeyInput, onChange: (e) => setApiKeyInput(e.target.value) }), /* @__PURE__ */ React.createElement("button", { style: S.primaryBtn, onClick: saveApiKey }, "Guardar chave")), isSummaryView && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("div", { style: S.pageHeading }, "Resumo dos pedidos"), /* @__PURE__ */ React.createElement("div", { style: S.card }, /* @__PURE__ */ React.createElement("div", { style: S.rowBetween }, /* @__PURE__ */ React.createElement("div", { style: S.cardLabel }, "Todos os pedidos ativos"), /* @__PURE__ */ React.createElement("button", { style: { ...S.iconBtn }, onClick: () => window.print() }, "🖨️ Imprimir / PDF")), /* @__PURE__ */ React.createElement("pre", { style: S.emailBox }, buildFullSummary(shipments)), /* @__PURE__ */ React.createElement(CopyBtn, { text: buildFullSummary(shipments), label: "Copiar resumo completo" })), shipments.map((sh) => {
     return /* @__PURE__ */ React.createElement("div", { key: sh.id, style: S.card }, /* @__PURE__ */ React.createElement("div", { style: S.cardLabel }, sh.label.trim() || `${sh.pickupLoc || "?"} → ${sh.deliveryLoc || "?"}`), /* @__PURE__ */ React.createElement("div", { style: S.ticketMeta }, /* @__PURE__ */ React.createElement("span", null, sh.pickupLoc || "?", " → ", sh.deliveryLoc || "?"), /* @__PURE__ */ React.createElement("span", { style: S.dot }, "•"), /* @__PURE__ */ React.createElement("span", null, sh.pickupTime || "sem hora de carga"), /* @__PURE__ */ React.createElement("span", { style: S.dot }, "•"), /* @__PURE__ */ React.createElement("span", null, sh.deliveryTime || "sem hora de entrega")), sh.cargo && /* @__PURE__ */ React.createElement("div", { style: { ...S.ticketMeta, marginTop: 4 } }, /* @__PURE__ */ React.createElement("span", null, sh.cargo)), sh.customs !== "unspecified" && /* @__PURE__ */ React.createElement("div", { style: { ...S.badge, ...sh.customs === "yes" ? S.badgeWarn : S.badgeOk } }, sh.customs === "yes" ? "Customs necessário" : "Sem customs"), /* @__PURE__ */ React.createElement("div", { style: S.divider }), sh.quotes.length > 0 ? /* @__PURE__ */ React.createElement("div", { style: S.quoteList }, sh.quotes.slice().sort((a, b) => a.costPrice - b.costPrice).map((q) => /* @__PURE__ */ React.createElement("div", { key: q.id, style: { ...S.quoteRow, cursor: "default" } }, /* @__PURE__ */ React.createElement("div", { style: { flex: 1 } }, /* @__PURE__ */ React.createElement("div", { style: S.quoteSupplier }, q.supplier), (q.pickupTime || q.deliveryTime) && /* @__PURE__ */ React.createElement("div", { style: S.quoteNotes }, q.pickupTime && /* @__PURE__ */ React.createElement(React.Fragment, null, "carga: ", q.pickupTime), q.pickupTime && q.deliveryTime && " · ", q.deliveryTime && /* @__PURE__ */ React.createElement(React.Fragment, null, "entrega: ", q.deliveryTime)), sh.clientName.trim() && /* @__PURE__ */ React.createElement("div", { style: S.quoteNotes }, "Cliente: ", sh.clientName.trim())), /* @__PURE__ */ React.createElement("div", { style: S.quotePriceCol }, /* @__PURE__ */ React.createElement("div", { style: S.quotePrice }, "€", q.costPrice.toLocaleString("en-US")), /* @__PURE__ */ React.createElement("div", { style: S.quotePriceLabel }, "fornecedor"), q.sellPrice != null && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("div", { style: { ...S.quotePrice, color: "#5FAE7D" } }, "€", q.sellPrice.toLocaleString("en-US")), /* @__PURE__ */ React.createElement("div", { style: S.quotePriceLabel }, "cliente")))))) : /* @__PURE__ */ React.createElement("div", { style: S.hint }, "Sem cotações ainda."));
-  }), shipments.length === 0 && /* @__PURE__ */ React.createElement("div", { style: S.empty }, "Ainda sem pedidos para mostrar no resumo.")), isEmailListsView && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("div", { style: S.pageHeading }, "Listas de Email"), /* @__PURE__ */ React.createElement("div", { style: S.card }, /* @__PURE__ */ React.createElement("div", { style: S.cardLabel }, "Nova lista"), /* @__PURE__ */ React.createElement("div", { style: { marginBottom: 14 } }, /* @__PURE__ */ React.createElement(Field, { label: "Nome da lista" }, /* @__PURE__ */ React.createElement("input", { style: S.input, value: newListName, onChange: (e) => setNewListName(e.target.value), placeholder: "ex: Fornecedores UE" }))), /* @__PURE__ */ React.createElement("div", { style: { marginBottom: 14 } }, /* @__PURE__ */ React.createElement(Field, { label: "Emails (um por linha, ou separados por vírgula)" }, /* @__PURE__ */ React.createElement("textarea", { style: S.textarea, rows: 4, value: newListEmailsText, onChange: (e) => setNewListEmailsText(e.target.value), placeholder: "fornecedor1@exemplo.com\nfornecedor2@exemplo.com" }))), /* @__PURE__ */ React.createElement("button", { style: S.primaryBtn, onClick: addEmailList }, "+ Criar lista")), emailLists.length === 0 ? /* @__PURE__ */ React.createElement("div", { style: S.empty }, "Ainda sem listas guardadas.") : emailLists.map((l) => /* @__PURE__ */ React.createElement("div", { key: l.id, style: S.card }, /* @__PURE__ */ React.createElement("div", { style: S.rowBetween }, /* @__PURE__ */ React.createElement("div", { style: S.cardLabel }, l.name, " (", l.emails.length, ")"), /* @__PURE__ */ React.createElement("button", { style: S.iconBtn, onClick: () => deleteEmailList(l.id) }, "🗑 Remover")), /* @__PURE__ */ React.createElement("div", { style: S.hint }, l.emails.join(", "))))), isHistoryView && /* @__PURE__ */ React.createElement(HistoryView, { deletedShipments, restoreShipment, purgeDeletedShipment }), isCalculatorView && (() => {
+  }), shipments.length === 0 && /* @__PURE__ */ React.createElement("div", { style: S.empty }, "Ainda sem pedidos para mostrar no resumo.")), isEmailListsView && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("div", { style: S.pageHeading }, "Listas de Email"), /* @__PURE__ */ React.createElement("div", { style: S.card }, /* @__PURE__ */ React.createElement("div", { style: S.cardLabel }, "Nova lista"), /* @__PURE__ */ React.createElement("div", { style: { marginBottom: 14 } }, /* @__PURE__ */ React.createElement(Field, { label: "Nome da lista" }, /* @__PURE__ */ React.createElement("input", { style: S.input, value: newListName, onChange: (e) => setNewListName(e.target.value), placeholder: "ex: Fornecedores UE" }))), /* @__PURE__ */ React.createElement("div", { style: { marginBottom: 14 } }, /* @__PURE__ */ React.createElement(Field, { label: "Emails (um por linha, ou separados por vírgula)" }, /* @__PURE__ */ React.createElement("textarea", { style: S.textarea, rows: 4, value: newListEmailsText, onChange: (e) => setNewListEmailsText(e.target.value), placeholder: "fornecedor1@exemplo.com\nfornecedor2@exemplo.com" }))), /* @__PURE__ */ React.createElement("button", { style: S.primaryBtn, onClick: addEmailList }, "+ Criar lista")), emailLists.length === 0 ? /* @__PURE__ */ React.createElement("div", { style: S.empty }, "Ainda sem listas guardadas.") : emailLists.map((l) => /* @__PURE__ */ React.createElement("div", { key: l.id, style: S.card }, /* @__PURE__ */ React.createElement("div", { style: S.rowBetween }, /* @__PURE__ */ React.createElement("div", { style: S.cardLabel }, l.name, " (", l.emails.length, ")"), /* @__PURE__ */ React.createElement("button", { style: S.iconBtn, onClick: () => deleteEmailList(l.id) }, "🗑 Remover")), /* @__PURE__ */ React.createElement("div", { style: S.hint }, l.emails.join(", "))))), isHistoryView && /* @__PURE__ */ React.createElement(HistoryView, { deletedShipments, restoreShipment, purgeDeletedShipment }), isDashboardView && /* @__PURE__ */ React.createElement(MetricsDashboard, { shipments, deletedShipments, visibleMetrics, setVisibleMetrics }), isCalculatorView && (() => {
     const hasVan = currentVan.length && currentVan.width && currentVan.height;
     const pack = hasVan && cargoItems.length > 0 ? packBoxes(currentVan, cargoItems) : { placed: [], unplaced: [] };
     const vCapacity = parseFloat(currentVan.capacity) || 0;
@@ -995,7 +1122,7 @@ function DispatchDesk() {
         onChange: (e) => updateShipmentField(sh.id, "label", e.target.value),
         placeholder: "Dar nome a este pedido..."
       }
-    ), /* @__PURE__ */ React.createElement("button", { style: S.iconBtn, onClick: () => removeShipment(sh.id) }, "🗑 Remover")), /* @__PURE__ */ React.createElement("div", { style: S.card }, /* @__PURE__ */ React.createElement("div", { style: S.cardLabel }, "Detalhes do pedido"), /* @__PURE__ */ React.createElement("div", { style: { marginBottom: 16 } }, /* @__PURE__ */ React.createElement(Field, { label: "Nome do cliente (opcional)" }, /* @__PURE__ */ React.createElement("input", { style: S.input, value: sh.clientName, onChange: (e) => updateShipmentField(sh.id, "clientName", e.target.value), placeholder: "Client Name" }))), /* @__PURE__ */ React.createElement("div", { style: S.grid2 }, /* @__PURE__ */ React.createElement(Field, { label: "Local de carga" }, /* @__PURE__ */ React.createElement("input", { style: S.input, value: sh.pickupLoc, onChange: (e) => updateShipmentField(sh.id, "pickupLoc", e.target.value), placeholder: "FRA apt" })), /* @__PURE__ */ React.createElement(Field, { label: "Data / hora de carga" }, /* @__PURE__ */ React.createElement("input", { style: S.input, value: sh.pickupTime, onChange: (e) => updateShipmentField(sh.id, "pickupTime", e.target.value), placeholder: "ready this afternoon" })), /* @__PURE__ */ React.createElement(Field, { label: "Local de entrega" }, /* @__PURE__ */ React.createElement("input", { style: S.input, value: sh.deliveryLoc, onChange: (e) => updateShipmentField(sh.id, "deliveryLoc", e.target.value), placeholder: "NAP apt" })), /* @__PURE__ */ React.createElement(Field, { label: "Data / hora de entrega" }, /* @__PURE__ */ React.createElement("input", { style: S.input, value: sh.deliveryTime, onChange: (e) => updateShipmentField(sh.id, "deliveryTime", e.target.value), placeholder: "by Monday 17th Aug" })), /* @__PURE__ */ React.createElement(Field, { label: "Carga (dimensões / peso)" }, /* @__PURE__ */ React.createElement("input", { style: S.input, value: sh.cargo, onChange: (e) => updateShipmentField(sh.id, "cargo", e.target.value), placeholder: "1x 30x20x20cm, 0.60kg" })), /* @__PURE__ */ React.createElement(Field, { label: "Customs" }, /* @__PURE__ */ React.createElement("select", { style: S.input, value: sh.customs, onChange: (e) => updateShipmentField(sh.id, "customs", e.target.value) }, /* @__PURE__ */ React.createElement("option", { value: "unspecified" }, "Por confirmar"), /* @__PURE__ */ React.createElement("option", { value: "yes" }, "Necessário"), /* @__PURE__ */ React.createElement("option", { value: "no" }, "Não necessário"))))), /* @__PURE__ */ React.createElement("div", { className: "dd-grid", style: { marginTop: 24 } }, /* @__PURE__ */ React.createElement("div", { style: S.card }, /* @__PURE__ */ React.createElement("div", { style: S.cardLabel }, "Cotações"), sh.quotes.length > 0 && /* @__PURE__ */ React.createElement("div", { style: S.quoteList }, sh.quotes.slice().sort((a, b) => a.costPrice - b.costPrice).map((q) => /* @__PURE__ */ React.createElement("label", { key: q.id, style: { ...S.quoteRow, ...q.id === chosenId ? S.quoteRowActive : {} } }, /* @__PURE__ */ React.createElement("input", { type: "radio", name: `quote-${sh.id}`, checked: q.id === chosenId, onChange: () => setSelectedQuote({ ...selectedQuote, [sh.id]: q.id }), style: { marginRight: 8 } }), /* @__PURE__ */ React.createElement("div", { style: { flex: 1 } }, /* @__PURE__ */ React.createElement("div", { style: S.quoteSupplier }, q.supplier, q.id === best && /* @__PURE__ */ React.createElement("span", { style: S.bestTag }, "melhor preço")), (q.pickupTime || q.deliveryTime) && /* @__PURE__ */ React.createElement("div", { style: S.quoteNotes }, q.pickupTime && /* @__PURE__ */ React.createElement(React.Fragment, null, "carga: ", q.pickupTime), q.pickupTime && q.deliveryTime && " · ", q.deliveryTime && /* @__PURE__ */ React.createElement(React.Fragment, null, "entrega: ", q.deliveryTime))), /* @__PURE__ */ React.createElement("div", { style: S.quotePriceCol }, /* @__PURE__ */ React.createElement("div", { style: S.quotePrice }, "€", q.costPrice.toLocaleString("en-US")), /* @__PURE__ */ React.createElement("div", { style: S.quotePriceLabel }, "fornecedor"), q.sellPrice != null && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("div", { style: { ...S.quotePrice, color: "#5FAE7D" } }, "€", q.sellPrice.toLocaleString("en-US")), /* @__PURE__ */ React.createElement("div", { style: S.quotePriceLabel }, "cliente"))), /* @__PURE__ */ React.createElement("button", { style: S.iconBtnSmall, onClick: (e) => {
+    ), /* @__PURE__ */ React.createElement("button", { style: S.iconBtn, onClick: () => requestDeleteShipment(sh.id) }, "🗑 Remover")), /* @__PURE__ */ React.createElement("div", { style: S.card }, /* @__PURE__ */ React.createElement("div", { style: S.cardLabel }, "Detalhes do pedido"), /* @__PURE__ */ React.createElement("div", { style: { marginBottom: 16 } }, /* @__PURE__ */ React.createElement(Field, { label: "Nome do cliente (opcional)" }, /* @__PURE__ */ React.createElement("input", { style: S.input, value: sh.clientName, onChange: (e) => updateShipmentField(sh.id, "clientName", e.target.value), placeholder: "Client Name" }))), /* @__PURE__ */ React.createElement("div", { style: S.grid2 }, /* @__PURE__ */ React.createElement(Field, { label: "Local de carga" }, /* @__PURE__ */ React.createElement("input", { style: S.input, value: sh.pickupLoc, onChange: (e) => updateShipmentField(sh.id, "pickupLoc", e.target.value), placeholder: "FRA apt" })), /* @__PURE__ */ React.createElement(Field, { label: "Data / hora de carga" }, /* @__PURE__ */ React.createElement("input", { style: S.input, value: sh.pickupTime, onChange: (e) => updateShipmentField(sh.id, "pickupTime", e.target.value), placeholder: "ready this afternoon" })), /* @__PURE__ */ React.createElement(Field, { label: "Local de entrega" }, /* @__PURE__ */ React.createElement("input", { style: S.input, value: sh.deliveryLoc, onChange: (e) => updateShipmentField(sh.id, "deliveryLoc", e.target.value), placeholder: "NAP apt" })), /* @__PURE__ */ React.createElement(Field, { label: "Data / hora de entrega" }, /* @__PURE__ */ React.createElement("input", { style: S.input, value: sh.deliveryTime, onChange: (e) => updateShipmentField(sh.id, "deliveryTime", e.target.value), placeholder: "by Monday 17th Aug" })), /* @__PURE__ */ React.createElement(Field, { label: "Carga (dimensões / peso)" }, /* @__PURE__ */ React.createElement("input", { style: S.input, value: sh.cargo, onChange: (e) => updateShipmentField(sh.id, "cargo", e.target.value), placeholder: "1x 30x20x20cm, 0.60kg" })), /* @__PURE__ */ React.createElement(Field, { label: "Customs" }, /* @__PURE__ */ React.createElement("select", { style: S.input, value: sh.customs, onChange: (e) => updateShipmentField(sh.id, "customs", e.target.value) }, /* @__PURE__ */ React.createElement("option", { value: "unspecified" }, "Por confirmar"), /* @__PURE__ */ React.createElement("option", { value: "yes" }, "Necessário"), /* @__PURE__ */ React.createElement("option", { value: "no" }, "Não necessário"))))), /* @__PURE__ */ React.createElement("div", { className: "dd-grid", style: { marginTop: 24 } }, /* @__PURE__ */ React.createElement("div", { style: S.card }, /* @__PURE__ */ React.createElement("div", { style: S.cardLabel }, "Cotações"), sh.quotes.length > 0 && /* @__PURE__ */ React.createElement("div", { style: S.quoteList }, sh.quotes.slice().sort((a, b) => a.costPrice - b.costPrice).map((q) => /* @__PURE__ */ React.createElement("label", { key: q.id, style: { ...S.quoteRow, ...q.id === chosenId ? S.quoteRowActive : {} } }, /* @__PURE__ */ React.createElement("input", { type: "radio", name: `quote-${sh.id}`, checked: q.id === chosenId, onChange: () => setSelectedQuote({ ...selectedQuote, [sh.id]: q.id }), style: { marginRight: 8 } }), /* @__PURE__ */ React.createElement("div", { style: { flex: 1 } }, /* @__PURE__ */ React.createElement("div", { style: S.quoteSupplier }, q.supplier, q.id === best && /* @__PURE__ */ React.createElement("span", { style: S.bestTag }, "melhor preço")), (q.pickupTime || q.deliveryTime) && /* @__PURE__ */ React.createElement("div", { style: S.quoteNotes }, q.pickupTime && /* @__PURE__ */ React.createElement(React.Fragment, null, "carga: ", q.pickupTime), q.pickupTime && q.deliveryTime && " · ", q.deliveryTime && /* @__PURE__ */ React.createElement(React.Fragment, null, "entrega: ", q.deliveryTime))), /* @__PURE__ */ React.createElement("div", { style: S.quotePriceCol }, /* @__PURE__ */ React.createElement("div", { style: S.quotePrice }, "€", q.costPrice.toLocaleString("en-US")), /* @__PURE__ */ React.createElement("div", { style: S.quotePriceLabel }, "fornecedor"), q.sellPrice != null && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("div", { style: { ...S.quotePrice, color: "#5FAE7D" } }, "€", q.sellPrice.toLocaleString("en-US")), /* @__PURE__ */ React.createElement("div", { style: S.quotePriceLabel }, "cliente"))), /* @__PURE__ */ React.createElement("button", { style: S.iconBtnSmall, onClick: (e) => {
       e.preventDefault();
       removeQuote(sh.id, q.id);
     } }, "🗑")))), /* @__PURE__ */ React.createElement("div", { style: S.addQuoteGrid }, /* @__PURE__ */ React.createElement("input", { style: S.input, placeholder: "Fornecedor", value: draft.supplier, onChange: (e) => updateQuoteDraft(sh.id, "supplier", e.target.value) }), /* @__PURE__ */ React.createElement("input", { style: S.input, placeholder: "Quando carrega", value: draft.pickupTime, onChange: (e) => updateQuoteDraft(sh.id, "pickupTime", e.target.value) }), /* @__PURE__ */ React.createElement("input", { style: S.input, placeholder: "Quando entrega", value: draft.deliveryTime, onChange: (e) => updateQuoteDraft(sh.id, "deliveryTime", e.target.value) }), /* @__PURE__ */ React.createElement("input", { style: S.input, placeholder: "Preço fornecedor (€)", type: "number", value: draft.costPrice, onChange: (e) => updateQuoteDraft(sh.id, "costPrice", e.target.value) }), /* @__PURE__ */ React.createElement("input", { style: S.input, placeholder: "Preço ao cliente (€)", type: "number", value: draft.sellPrice, onChange: (e) => updateQuoteDraft(sh.id, "sellPrice", e.target.value) }), /* @__PURE__ */ React.createElement("button", { style: S.secondaryBtn, onClick: () => addQuote(sh.id) }, "+ Adicionar"))), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 24 } }, /* @__PURE__ */ React.createElement("div", { style: S.card }, /* @__PURE__ */ React.createElement("div", { style: S.rowBetween }, /* @__PURE__ */ React.createElement("div", { style: S.cardLabel }, "Mensagem para fornecedores"), /* @__PURE__ */ React.createElement(
@@ -1017,12 +1144,14 @@ function DispatchDesk() {
         }
       }
     )), translating === `sh-email-${sh.id}` && /* @__PURE__ */ React.createElement("div", { style: S.hint }, "A traduzir..."), /* @__PURE__ */ React.createElement("pre", { style: S.emailBox }, buildEmail(sh, lang, chosen, getTranslated(`sh-email-${sh.id}`, { pickupLoc: sh.pickupLoc, pickupTime: (chosen == null ? void 0 : chosen.pickupTime) || sh.pickupTime, deliveryLoc: sh.deliveryLoc, deliveryTime: (chosen == null ? void 0 : chosen.deliveryTime) || sh.deliveryTime, cargo: sh.cargo }, lang))), /* @__PURE__ */ React.createElement(CopyBtn, { text: buildEmail(sh, lang, chosen, getTranslated(`sh-email-${sh.id}`, { pickupLoc: sh.pickupLoc, pickupTime: (chosen == null ? void 0 : chosen.pickupTime) || sh.pickupTime, deliveryLoc: sh.deliveryLoc, deliveryTime: (chosen == null ? void 0 : chosen.deliveryTime) || sh.deliveryTime, cargo: sh.cargo }, lang)), label: "Copiar email" })))));
-  }), /* @__PURE__ */ React.createElement("div", { style: S.footNote }, "📦 Os teus pedidos ficam guardados neste browser (mesmo depois de fechares)."))));
+  }), /* @__PURE__ */ React.createElement("div", { style: S.footNote }, "📦 Os teus pedidos ficam guardados neste browser (mesmo depois de fechares)."))), pendingDeleteId && /* @__PURE__ */ React.createElement(ConfirmDeleteModal, { onAccepted: () => confirmDeleteShipment("accepted"), onRejected: () => confirmDeleteShipment("rejected"), onCancel: cancelDeleteShipment }));
 }
 const mono = "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace";
 const sans = "-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
 const S = {
   shell: { display: "flex", minHeight: "100vh", background: "#0E1013", fontFamily: sans, color: "#EDEBE6" },
+  modalOverlay: { position: "fixed", inset: 0, background: "rgba(0,0,0,0.6)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000, padding: 20 },
+  modalCard: { background: "#171A1E", border: "1px solid #2A2E33", borderRadius: 12, padding: 24, width: "100%", maxWidth: 380 },
   sidebar: { width: 280, flexShrink: 0, background: "#14171A", borderRight: "1px solid #2A2E33", padding: "28px 20px", display: "flex", flexDirection: "column", position: "sticky", top: 0, height: "100vh", overflowY: "auto" },
   sidebarHeader: { display: "flex", alignItems: "center", gap: 12, marginBottom: 26 },
   main: { flex: 1, padding: "40px 48px", overflowY: "auto" },
@@ -1033,6 +1162,8 @@ const S = {
   subtitle: { fontSize: 12, color: "#8B9098", marginTop: 3 },
   settingsBtn: { background: "transparent", border: "1px solid #2A2E33", borderRadius: 7, padding: "8px 11px", cursor: "pointer", fontSize: 15, color: "#8B9098" },
   settingsBtnWide: { background: "transparent", border: "1px solid #2A2E33", borderRadius: 7, padding: "10px 12px", cursor: "pointer", fontSize: 13, color: "#8B9098", width: "100%", marginTop: "auto" },
+  navBtn: { background: "transparent", border: "1px solid transparent", borderRadius: 7, padding: "8px 10px", cursor: "pointer", fontSize: 12.5, fontWeight: 500, color: "#8B9098", width: "100%", textAlign: "left" },
+  navBtnActive: { background: "#1D1710", color: "#E8A33D", border: "1px solid #2A2E33" },
   navList: { display: "flex", flexDirection: "column", gap: 6, flex: 1, overflowY: "auto" },
   navEmpty: { color: "#5F6369", fontSize: 12.5, padding: "10px 2px" },
   navItem: { display: "flex", alignItems: "center", gap: 8, borderRadius: 8, padding: "10px 12px", cursor: "pointer", border: "1px solid transparent" },
