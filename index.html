@@ -349,6 +349,7 @@ const STORAGE_KEY = "dispatch-desk-shipments-v1";
 const API_KEY_STORAGE = "dispatch-desk-api-key-v1";
 const VAN_STORAGE = "dispatch-desk-vans-v1";
 const EMAIL_LISTS_STORAGE = "dispatch-desk-email-lists-v1";
+const DELETED_STORAGE = "dispatch-desk-deleted-v1";
 const emptyShipment = () => ({
   id: uid(),
   label: "",
@@ -618,19 +619,6 @@ function bestQuoteId(sh) {
   return sh.quotes.reduce((min, q) => q.costPrice < min.costPrice ? q : min, sh.quotes[0]).id;
 }
 const DEFAULT_TO_EMAIL = "ask@mdexpress.pt";
-const COMPANY_SIGNATURE_TEXT = [
-  "MD Express Lda",
-  "Rua Damiana Maria Silva, Lote 7, Sala 1",
-  "4705-087 Ferreiros (BRAGA, PORTUGAL)",
-  "",
-  "Tel. +351 915286937 - Daniel Almeida",
-  "Tel. +351 915286928 - Ilona Natkanska",
-  "Tel. +351 913798351 -  Eduardo Alves",
-  "Tel. +351 913798378 - Bruna Cardoso",
-  "Tel. +351 915286930 \u2013 Fernando Silva",
-  "",
-  "\u201cAs informa\u00e7\u00f5es contidas neste anexo de e-mail e arquivo s\u00e3o confidenciais e devem ser lidas apenas pela pessoa ou entidade a quem s\u00e3o endere\u00e7adas. Se voc\u00ea recebeu esta comunica\u00e7\u00e3o por engano, notifique o remetente e exclua imediatamente a mensagem e os arquivos anexados sem ler, copiar, gravar, distribuir, disseminar ou disseminar qualquer outra informa\u00e7\u00e3o\u201d.",
-].join("\n");
 function buildMailtoLink(bccEmails, subject, body, toEmail) {
   const to = encodeURIComponent(toEmail || "");
   const bcc = encodeURIComponent(bccEmails.join(","));
@@ -677,6 +665,65 @@ function buildFullSummary(shipments) {
 function Field({ label, children }) {
   return /* @__PURE__ */ React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 6 } }, /* @__PURE__ */ React.createElement("label", { style: S.fieldLabel }, label), children);
 }
+function HistoryView({ deletedShipments, restoreShipment, purgeDeletedShipment }) {
+  const e = React.createElement;
+  if (deletedShipments.length === 0) {
+    return e(React.Fragment, null,
+      e("div", { style: S.pageHeading }, "Histórico de pedidos eliminados"),
+      e("div", { style: S.empty }, "Sem pedidos eliminados.")
+    );
+  }
+  return e(React.Fragment, null,
+    e("div", { style: S.pageHeading }, "Histórico de pedidos eliminados"),
+    deletedShipments.map((sh) => {
+      const title = sh.label.trim() || `${sh.pickupLoc || "?"} → ${sh.deliveryLoc || "?"}`;
+      const quoteRows = sh.quotes.length === 0
+        ? e("div", { style: S.hint }, "Sem cotações.")
+        : e("div", { style: S.quoteList },
+            sh.quotes.slice().sort((a, b) => a.costPrice - b.costPrice).map((q) =>
+              e("div", { key: q.id, style: { ...S.quoteRow, cursor: "default" } },
+                e("div", { style: { flex: 1 } },
+                  e("div", { style: S.quoteSupplier }, q.supplier),
+                  (q.pickupTime || q.deliveryTime) && e("div", { style: S.quoteNotes },
+                    q.pickupTime ? `carga: ${q.pickupTime}` : "",
+                    q.pickupTime && q.deliveryTime ? " · " : "",
+                    q.deliveryTime ? `entrega: ${q.deliveryTime}` : ""
+                  )
+                ),
+                e("div", { style: S.quotePriceCol },
+                  e("div", { style: S.quotePrice }, `€${q.costPrice.toLocaleString("en-US")}`),
+                  e("div", { style: S.quotePriceLabel }, "fornecedor"),
+                  q.sellPrice != null ? e(React.Fragment, null,
+                    e("div", { style: { ...S.quotePrice, color: "#5FAE7D" } }, `€${q.sellPrice.toLocaleString("en-US")}`),
+                    e("div", { style: S.quotePriceLabel }, "cliente")
+                  ) : null
+                )
+              )
+            )
+          );
+      return e("div", { key: sh.id, style: S.card },
+        e("div", { style: S.rowBetween },
+          e("div", { style: S.cardLabel }, title),
+          e("div", { style: { display: "flex", gap: 8 } },
+            e("button", { style: S.secondaryBtn, onClick: () => restoreShipment(sh.id) }, "↩️ Restaurar"),
+            e("button", { style: S.iconBtn, onClick: () => purgeDeletedShipment(sh.id) }, "🗑 Eliminar definitivamente")
+          )
+        ),
+        e("div", { style: S.ticketMeta },
+          e("span", null, `${sh.pickupLoc || "?"} → ${sh.deliveryLoc || "?"}`),
+          e("span", { style: S.dot }, "•"),
+          e("span", null, sh.pickupTime || "sem hora de carga"),
+          e("span", { style: S.dot }, "•"),
+          e("span", null, sh.deliveryTime || "sem hora de entrega")
+        ),
+        sh.cargo ? e("div", { style: { ...S.ticketMeta, marginTop: 4 } }, e("span", null, sh.cargo)) : null,
+        sh.clientName.trim() ? e("div", { style: { ...S.ticketMeta, marginTop: 4 } }, e("span", null, `Cliente: ${sh.clientName.trim()}`)) : null,
+        e("div", { style: S.divider }),
+        quoteRows
+      );
+    })
+  );
+}
 function CopyBtn({ text, label }) {
   const [copied, setCopied] = useState(false);
   async function copy() {
@@ -702,6 +749,16 @@ function DispatchDesk() {
     }
   });
   const [activeTabId, setActiveTabId] = useState(((_a = shipments[0]) == null ? void 0 : _a.id) || "new");
+  const [deletedShipments, setDeletedShipments] = useState(() => {
+    try {
+      return JSON.parse(localStorage.getItem(DELETED_STORAGE)) || [];
+    } catch (e) {
+      return [];
+    }
+  });
+  useEffect(() => {
+    localStorage.setItem(DELETED_STORAGE, JSON.stringify(deletedShipments));
+  }, [deletedShipments]);
   const [form, setForm] = useState(emptyShipment());
   const [pasteText, setPasteText] = useState("");
   const [quoteDrafts, setQuoteDrafts] = useState({});
@@ -752,8 +809,7 @@ function DispatchDesk() {
   function sendSupplierEmail(sh, messageText) {
     const list = emailLists.find((l) => l.id === selectedEmailListByShipment[sh.id]);
     if (!list || list.emails.length === 0) return;
-    const fullBody = messageText + "\n\n" + COMPANY_SIGNATURE_TEXT;
-    const link = buildMailtoLink(list.emails, buildSupplierEmailSubject(sh), fullBody, DEFAULT_TO_EMAIL);
+    const link = buildMailtoLink(list.emails, buildSupplierEmailSubject(sh), messageText, DEFAULT_TO_EMAIL);
     window.location.href = link;
   }
   useEffect(() => {
@@ -828,10 +884,26 @@ function DispatchDesk() {
   }
   function removeShipment(id) {
     setShipments((s) => {
+      const removed = s.find((sh) => sh.id === id);
+      if (removed) setDeletedShipments((d) => [{ ...removed, deletedAt: Date.now() }, ...d]);
       const next = s.filter((sh) => sh.id !== id);
       if (activeTabId === id) setActiveTabId(next.length ? next[0].id : "new");
       return next;
     });
+  }
+  function restoreShipment(id) {
+    setDeletedShipments((d) => {
+      const found = d.find((sh) => sh.id === id);
+      if (found) {
+        const { deletedAt, ...rest } = found;
+        setShipments((s) => [rest, ...s]);
+        setActiveTabId(rest.id);
+      }
+      return d.filter((sh) => sh.id !== id);
+    });
+  }
+  function purgeDeletedShipment(id) {
+    setDeletedShipments((d) => d.filter((sh) => sh.id !== id));
   }
   function updateQuoteDraft(shipmentId, field, value) {
     setQuoteDrafts((d) => ({ ...d, [shipmentId]: { ...d[shipmentId], [field]: value } }));
@@ -865,8 +937,9 @@ function DispatchDesk() {
   const isCalculatorView = activeTabId === "calculator";
   const isSummaryView = activeTabId === "summary";
   const isEmailListsView = activeTabId === "emaillists";
-  const isNewView = !isCalculatorView && !isSummaryView && !isEmailListsView && (activeTabId === "new" || !shipments.some((sh) => sh.id === activeTabId));
-  return /* @__PURE__ */ React.createElement("div", { style: S.shell }, /* @__PURE__ */ React.createElement("div", { style: S.sidebar, className: "dd-sidebar-noprint" }, /* @__PURE__ */ React.createElement("div", { style: S.sidebarHeader }, /* @__PURE__ */ React.createElement("div", { style: S.headerIcon }, "✈️"), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { style: S.title }, "Dispatch Desk"), /* @__PURE__ */ React.createElement("div", { style: S.subtitle }, "gestão de transportes"))), /* @__PURE__ */ React.createElement("button", { style: { ...S.primaryBtn, marginBottom: 10 }, onClick: () => setActiveTabId("new") }, "+ Novo pedido"), /* @__PURE__ */ React.createElement("button", { style: { ...S.secondaryBtnWide, marginBottom: 10, ...isCalculatorView ? { background: "#E8A33D", color: "#0E1013" } : {} }, onClick: () => setActiveTabId("calculator") }, "📐 Calculadora de Carga"), /* @__PURE__ */ React.createElement("button", { style: { ...S.secondaryBtnWide, marginBottom: 18, ...isSummaryView ? { background: "#E8A33D", color: "#0E1013" } : {} }, onClick: () => setActiveTabId("summary") }, "📋 Resumo"), /* @__PURE__ */ React.createElement("button", { style: { ...S.secondaryBtnWide, marginBottom: 18, ...isEmailListsView ? { background: "#E8A33D", color: "#0E1013" } : {} }, onClick: () => setActiveTabId("emaillists") }, "✉️ Listas de Email"), /* @__PURE__ */ React.createElement("div", { style: S.navList }, shipments.length === 0 && /* @__PURE__ */ React.createElement("div", { style: S.navEmpty }, "Sem pedidos ainda"), shipments.map((sh) => {
+  const isHistoryView = activeTabId === "history";
+  const isNewView = !isCalculatorView && !isSummaryView && !isEmailListsView && !isHistoryView && (activeTabId === "new" || !shipments.some((sh) => sh.id === activeTabId));
+  return /* @__PURE__ */ React.createElement("div", { style: S.shell }, /* @__PURE__ */ React.createElement("div", { style: S.sidebar, className: "dd-sidebar-noprint" }, /* @__PURE__ */ React.createElement("div", { style: S.sidebarHeader }, /* @__PURE__ */ React.createElement("div", { style: S.headerIcon }, "✈️"), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { style: S.title }, "Dispatch Desk"), /* @__PURE__ */ React.createElement("div", { style: S.subtitle }, "gestão de transportes"))), /* @__PURE__ */ React.createElement("button", { style: { ...S.primaryBtn, marginBottom: 10 }, onClick: () => setActiveTabId("new") }, "+ Novo pedido"), /* @__PURE__ */ React.createElement("button", { style: { ...S.secondaryBtnWide, marginBottom: 10, ...isCalculatorView ? { background: "#E8A33D", color: "#0E1013" } : {} }, onClick: () => setActiveTabId("calculator") }, "📐 Calculadora de Carga"), /* @__PURE__ */ React.createElement("button", { style: { ...S.secondaryBtnWide, marginBottom: 18, ...isSummaryView ? { background: "#E8A33D", color: "#0E1013" } : {} }, onClick: () => setActiveTabId("summary") }, "📋 Resumo"), /* @__PURE__ */ React.createElement("button", { style: { ...S.secondaryBtnWide, marginBottom: 18, ...isEmailListsView ? { background: "#E8A33D", color: "#0E1013" } : {} }, onClick: () => setActiveTabId("emaillists") }, "✉️ Listas de Email"), /* @__PURE__ */ React.createElement("button", { style: { ...S.secondaryBtnWide, marginBottom: 18, ...isHistoryView ? { background: "#E8A33D", color: "#0E1013" } : {} }, onClick: () => setActiveTabId("history") }, "🗄️ Histórico"), /* @__PURE__ */ React.createElement("div", { style: S.navList }, shipments.length === 0 && /* @__PURE__ */ React.createElement("div", { style: S.navEmpty }, "Sem pedidos ainda"), shipments.map((sh) => {
     const isActive = sh.id === activeTabId;
     return /* @__PURE__ */ React.createElement("div", { key: sh.id, style: { ...S.navItem, ...isActive ? S.navItemActive : {} }, onClick: () => setActiveTabId(sh.id) }, /* @__PURE__ */ React.createElement("div", { style: { flex: 1, minWidth: 0 } }, /* @__PURE__ */ React.createElement("div", { style: S.navItemLabel }, sh.label.trim() ? sh.label.trim() : `${sh.pickupLoc || "?"} → ${sh.deliveryLoc || "?"}`), /* @__PURE__ */ React.createElement("div", { style: S.navItemSub }, sh.pickupLoc || "?", " → ", sh.deliveryLoc || "?")), /* @__PURE__ */ React.createElement("button", { style: S.tabClose, onClick: (e) => {
       e.stopPropagation();
@@ -877,7 +950,7 @@ function DispatchDesk() {
     setShowSettings((s) => !s);
   } }, "⚙️ Definições")), /* @__PURE__ */ React.createElement("div", { style: S.main }, /* @__PURE__ */ React.createElement("div", { style: S.mainInner }, showSettings && /* @__PURE__ */ React.createElement("div", { style: S.card }, /* @__PURE__ */ React.createElement("div", { style: S.cardLabel }, "Tradução automática (opcional)"), /* @__PURE__ */ React.createElement("div", { style: S.hint }, "Para traduzir automaticamente o texto que escreves (não só os rótulos), cola aqui a tua chave da API da Anthropic. Fica guardada só neste browser. Sem chave, os botões PT/EN continuam a trocar o modelo da mensagem, mas o texto que escreveste mantém-se como o inseriste."), /* @__PURE__ */ React.createElement("input", { style: { ...S.input, marginTop: 10, marginBottom: 10 }, type: "password", placeholder: "sk-ant-...", value: apiKeyInput, onChange: (e) => setApiKeyInput(e.target.value) }), /* @__PURE__ */ React.createElement("button", { style: S.primaryBtn, onClick: saveApiKey }, "Guardar chave")), isSummaryView && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("div", { style: S.pageHeading }, "Resumo dos pedidos"), /* @__PURE__ */ React.createElement("div", { style: S.card }, /* @__PURE__ */ React.createElement("div", { style: S.rowBetween }, /* @__PURE__ */ React.createElement("div", { style: S.cardLabel }, "Todos os pedidos ativos"), /* @__PURE__ */ React.createElement("button", { style: { ...S.iconBtn }, onClick: () => window.print() }, "🖨️ Imprimir / PDF")), /* @__PURE__ */ React.createElement("pre", { style: S.emailBox }, buildFullSummary(shipments)), /* @__PURE__ */ React.createElement(CopyBtn, { text: buildFullSummary(shipments), label: "Copiar resumo completo" })), shipments.map((sh) => {
     return /* @__PURE__ */ React.createElement("div", { key: sh.id, style: S.card }, /* @__PURE__ */ React.createElement("div", { style: S.cardLabel }, sh.label.trim() || `${sh.pickupLoc || "?"} → ${sh.deliveryLoc || "?"}`), /* @__PURE__ */ React.createElement("div", { style: S.ticketMeta }, /* @__PURE__ */ React.createElement("span", null, sh.pickupLoc || "?", " → ", sh.deliveryLoc || "?"), /* @__PURE__ */ React.createElement("span", { style: S.dot }, "•"), /* @__PURE__ */ React.createElement("span", null, sh.pickupTime || "sem hora de carga"), /* @__PURE__ */ React.createElement("span", { style: S.dot }, "•"), /* @__PURE__ */ React.createElement("span", null, sh.deliveryTime || "sem hora de entrega")), sh.cargo && /* @__PURE__ */ React.createElement("div", { style: { ...S.ticketMeta, marginTop: 4 } }, /* @__PURE__ */ React.createElement("span", null, sh.cargo)), sh.customs !== "unspecified" && /* @__PURE__ */ React.createElement("div", { style: { ...S.badge, ...sh.customs === "yes" ? S.badgeWarn : S.badgeOk } }, sh.customs === "yes" ? "Customs necessário" : "Sem customs"), /* @__PURE__ */ React.createElement("div", { style: S.divider }), sh.quotes.length > 0 ? /* @__PURE__ */ React.createElement("div", { style: S.quoteList }, sh.quotes.slice().sort((a, b) => a.costPrice - b.costPrice).map((q) => /* @__PURE__ */ React.createElement("div", { key: q.id, style: { ...S.quoteRow, cursor: "default" } }, /* @__PURE__ */ React.createElement("div", { style: { flex: 1 } }, /* @__PURE__ */ React.createElement("div", { style: S.quoteSupplier }, q.supplier), (q.pickupTime || q.deliveryTime) && /* @__PURE__ */ React.createElement("div", { style: S.quoteNotes }, q.pickupTime && /* @__PURE__ */ React.createElement(React.Fragment, null, "carga: ", q.pickupTime), q.pickupTime && q.deliveryTime && " · ", q.deliveryTime && /* @__PURE__ */ React.createElement(React.Fragment, null, "entrega: ", q.deliveryTime)), sh.clientName.trim() && /* @__PURE__ */ React.createElement("div", { style: S.quoteNotes }, "Cliente: ", sh.clientName.trim())), /* @__PURE__ */ React.createElement("div", { style: S.quotePriceCol }, /* @__PURE__ */ React.createElement("div", { style: S.quotePrice }, "€", q.costPrice.toLocaleString("en-US")), /* @__PURE__ */ React.createElement("div", { style: S.quotePriceLabel }, "fornecedor"), q.sellPrice != null && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("div", { style: { ...S.quotePrice, color: "#5FAE7D" } }, "€", q.sellPrice.toLocaleString("en-US")), /* @__PURE__ */ React.createElement("div", { style: S.quotePriceLabel }, "cliente")))))) : /* @__PURE__ */ React.createElement("div", { style: S.hint }, "Sem cotações ainda."));
-  }), shipments.length === 0 && /* @__PURE__ */ React.createElement("div", { style: S.empty }, "Ainda sem pedidos para mostrar no resumo.")), isEmailListsView && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("div", { style: S.pageHeading }, "Listas de Email"), /* @__PURE__ */ React.createElement("div", { style: S.card }, /* @__PURE__ */ React.createElement("div", { style: S.cardLabel }, "Nova lista"), /* @__PURE__ */ React.createElement("div", { style: { marginBottom: 14 } }, /* @__PURE__ */ React.createElement(Field, { label: "Nome da lista" }, /* @__PURE__ */ React.createElement("input", { style: S.input, value: newListName, onChange: (e) => setNewListName(e.target.value), placeholder: "ex: Fornecedores UE" }))), /* @__PURE__ */ React.createElement("div", { style: { marginBottom: 14 } }, /* @__PURE__ */ React.createElement(Field, { label: "Emails (um por linha, ou separados por vírgula)" }, /* @__PURE__ */ React.createElement("textarea", { style: S.textarea, rows: 4, value: newListEmailsText, onChange: (e) => setNewListEmailsText(e.target.value), placeholder: "fornecedor1@exemplo.com\nfornecedor2@exemplo.com" }))), /* @__PURE__ */ React.createElement("button", { style: S.primaryBtn, onClick: addEmailList }, "+ Criar lista")), emailLists.length === 0 ? /* @__PURE__ */ React.createElement("div", { style: S.empty }, "Ainda sem listas guardadas.") : emailLists.map((l) => /* @__PURE__ */ React.createElement("div", { key: l.id, style: S.card }, /* @__PURE__ */ React.createElement("div", { style: S.rowBetween }, /* @__PURE__ */ React.createElement("div", { style: S.cardLabel }, l.name, " (", l.emails.length, ")"), /* @__PURE__ */ React.createElement("button", { style: S.iconBtn, onClick: () => deleteEmailList(l.id) }, "🗑 Remover")), /* @__PURE__ */ React.createElement("div", { style: S.hint }, l.emails.join(", "))))), isCalculatorView && (() => {
+  }), shipments.length === 0 && /* @__PURE__ */ React.createElement("div", { style: S.empty }, "Ainda sem pedidos para mostrar no resumo.")), isEmailListsView && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("div", { style: S.pageHeading }, "Listas de Email"), /* @__PURE__ */ React.createElement("div", { style: S.card }, /* @__PURE__ */ React.createElement("div", { style: S.cardLabel }, "Nova lista"), /* @__PURE__ */ React.createElement("div", { style: { marginBottom: 14 } }, /* @__PURE__ */ React.createElement(Field, { label: "Nome da lista" }, /* @__PURE__ */ React.createElement("input", { style: S.input, value: newListName, onChange: (e) => setNewListName(e.target.value), placeholder: "ex: Fornecedores UE" }))), /* @__PURE__ */ React.createElement("div", { style: { marginBottom: 14 } }, /* @__PURE__ */ React.createElement(Field, { label: "Emails (um por linha, ou separados por vírgula)" }, /* @__PURE__ */ React.createElement("textarea", { style: S.textarea, rows: 4, value: newListEmailsText, onChange: (e) => setNewListEmailsText(e.target.value), placeholder: "fornecedor1@exemplo.com\nfornecedor2@exemplo.com" }))), /* @__PURE__ */ React.createElement("button", { style: S.primaryBtn, onClick: addEmailList }, "+ Criar lista")), emailLists.length === 0 ? /* @__PURE__ */ React.createElement("div", { style: S.empty }, "Ainda sem listas guardadas.") : emailLists.map((l) => /* @__PURE__ */ React.createElement("div", { key: l.id, style: S.card }, /* @__PURE__ */ React.createElement("div", { style: S.rowBetween }, /* @__PURE__ */ React.createElement("div", { style: S.cardLabel }, l.name, " (", l.emails.length, ")"), /* @__PURE__ */ React.createElement("button", { style: S.iconBtn, onClick: () => deleteEmailList(l.id) }, "🗑 Remover")), /* @__PURE__ */ React.createElement("div", { style: S.hint }, l.emails.join(", "))))), isHistoryView && /* @__PURE__ */ React.createElement(HistoryView, { deletedShipments, restoreShipment, purgeDeletedShipment }), isCalculatorView && (() => {
     const hasVan = currentVan.length && currentVan.width && currentVan.height;
     const pack = hasVan && cargoItems.length > 0 ? packBoxes(currentVan, cargoItems) : { placed: [], unplaced: [] };
     const vCapacity = parseFloat(currentVan.capacity) || 0;
