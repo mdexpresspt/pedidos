@@ -759,6 +759,65 @@ function ConfirmDeleteModal({ onAccepted, onRejected, onCancel }) {
     )
   );
 }
+function BarChartSVG({ data, unit }) {
+  const e = React.createElement;
+  if (!data.length) return e("div", { style: S.hint }, "Sem dados suficientes.");
+  const max = Math.max(...data.map((d) => d.value), 1);
+  return e("div", { style: { display: "flex", flexDirection: "column", gap: 10 } },
+    data.map((d) => e("div", { key: d.label, style: { display: "flex", alignItems: "center", gap: 10 } },
+      e("div", { style: { width: 150, fontSize: 12, color: "#B0B4BA", flexShrink: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } }, d.label),
+      e("div", { style: { flex: 1, background: "#0E1013", borderRadius: 5, height: 18, position: "relative", overflow: "hidden" } },
+        e("div", { style: { width: `${(d.value / max) * 100}%`, background: "#E8A33D", height: "100%", borderRadius: 5, transition: "width .4s ease" } })
+      ),
+      e("div", { style: { width: 44, fontSize: 12, fontFamily: mono, color: "#EDEBE6", textAlign: "right", flexShrink: 0 } }, `${d.value}${unit || ""}`)
+    ))
+  );
+}
+function DonutChartSVG({ data }) {
+  const e = React.createElement;
+  const total = data.reduce((s, d) => s + d.value, 0);
+  const colors = ["#E8A33D", "#5FAE7D", "#D9705A", "#5B8DEF", "#8B9098"];
+  const r = 55, cx = 65, cy = 65, circumference = 2 * Math.PI * r;
+  let cumulative = 0;
+  const segments = total > 0 ? data.filter((d) => d.value > 0).map((d, i) => {
+    const fraction = d.value / total;
+    const dash = fraction * circumference;
+    const seg = e("circle", {
+      key: d.label,
+      cx, cy, r,
+      fill: "none",
+      stroke: colors[i % colors.length],
+      strokeWidth: 20,
+      strokeDasharray: `${dash} ${circumference - dash}`,
+      strokeDashoffset: -cumulative,
+      transform: `rotate(-90 ${cx} ${cy})`,
+      style: { transition: "stroke-dasharray .4s ease" }
+    });
+    cumulative += dash;
+    return seg;
+  }) : [e("circle", { key: "empty", cx, cy, r, fill: "none", stroke: "#2A2E33", strokeWidth: 20 })];
+  return e("div", { style: { display: "flex", alignItems: "center", gap: 22, flexWrap: "wrap" } },
+    e("svg", { viewBox: "0 0 130 130", width: 130, height: 130 }, segments),
+    e("div", { style: { display: "flex", flexDirection: "column", gap: 6 } },
+      data.map((d, i) => e("div", { key: d.label, style: { display: "flex", alignItems: "center", gap: 8, fontSize: 12.5, color: "#B0B4BA" } },
+        e("div", { style: { width: 10, height: 10, borderRadius: 3, background: colors[i % colors.length], flexShrink: 0 } }),
+        e("div", null, `${d.label}: ${d.value}${total > 0 ? ` (${((d.value / total) * 100).toFixed(0)}%)` : ""}`)
+      ))
+    )
+  );
+}
+function TrendChartSVG({ data }) {
+  const e = React.createElement;
+  if (!data.length) return e("div", { style: S.hint }, "Sem dados suficientes.");
+  const max = Math.max(...data.map((d) => d.value), 1);
+  return e("div", { style: { display: "flex", alignItems: "flex-end", gap: 5, height: 150, padding: "10px 2px 0" } },
+    data.map((d, i) => e("div", { key: `${d.label}-${i}`, style: { flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 6, height: "100%", justifyContent: "flex-end" } },
+      e("div", { style: { fontSize: 10.5, color: "#8B9098", fontFamily: mono } }, d.value || ""),
+      e("div", { style: { width: "100%", maxWidth: 22, background: "#E8A33D", borderRadius: "3px 3px 0 0", height: `${(d.value / max) * 100}%`, minHeight: d.value ? 3 : 0, transition: "height .4s ease" } }),
+      e("div", { style: { fontSize: 9.5, color: "#5F6369", whiteSpace: "nowrap" } }, d.label)
+    ))
+  );
+}
 function computeDashboardMetrics(shipments, deletedShipments) {
   const all = [...shipments, ...deletedShipments];
   const accepted = deletedShipments.filter((sh) => sh.outcome === "accepted");
@@ -789,6 +848,19 @@ function computeDashboardMetrics(shipments, deletedShipments) {
     customsCounts[c] = (customsCounts[c] || 0) + 1;
   });
   const withoutQuotes = all.filter((sh) => !sh.quotes || sh.quotes.length === 0).length;
+  const now = Date.now();
+  const dayBuckets = [];
+  for (let i = 13; i >= 0; i--) {
+    const d = new Date(now - i * 86400000);
+    dayBuckets.push({ key: d.toISOString().slice(0, 10), label: `${d.getDate()}/${d.getMonth() + 1}` });
+  }
+  const countByDay = {};
+  deletedShipments.forEach((sh) => {
+    if (!sh.deletedAt) return;
+    const key = new Date(sh.deletedAt).toISOString().slice(0, 10);
+    countByDay[key] = (countByDay[key] || 0) + 1;
+  });
+  const historyTrend = dayBuckets.map((d) => ({ label: d.label, value: countByDay[d.key] || 0 }));
   return [
     { key: "total", label: "Total de pedidos", value: all.length },
     { key: "active", label: "Pedidos ativos", value: shipments.length },
@@ -808,7 +880,12 @@ function computeDashboardMetrics(shipments, deletedShipments) {
     { key: "customsNo", label: "Pedidos sem customs", value: customsCounts.no },
     { key: "customsUnspecified", label: "Customs por confirmar", value: customsCounts.unspecified },
     { key: "topRoutes", label: "Rotas mais frequentes", value: topRoutes.length ? topRoutes.map(([r, c]) => `${r} (${c})`).join("  ·  ") : "—", wide: true },
-    { key: "topSuppliers", label: "Fornecedores mais cotados", value: topSuppliers.length ? topSuppliers.map(([s2, c]) => `${s2} (${c})`).join("  ·  ") : "—", wide: true }
+    { key: "topSuppliers", label: "Fornecedores mais cotados", value: topSuppliers.length ? topSuppliers.map(([s2, c]) => `${s2} (${c})`).join("  ·  ") : "—", wide: true },
+    { key: "chartAcceptance", label: "📊 Aceites vs não aceites", kind: "chart", chartType: "donut", wide: true, data: [{ label: "Aceites", value: accepted.length }, { label: "Não aceites", value: rejected.length }] },
+    { key: "chartCustoms", label: "📊 Distribuição de customs", kind: "chart", chartType: "donut", wide: true, data: [{ label: "Necessário", value: customsCounts.yes }, { label: "Não necessário", value: customsCounts.no }, { label: "Por confirmar", value: customsCounts.unspecified }] },
+    { key: "chartTopRoutes", label: "📊 Top rotas (gráfico)", kind: "chart", chartType: "bar", wide: true, data: topRoutes.map(([r, c]) => ({ label: r, value: c })) },
+    { key: "chartTopSuppliers", label: "📊 Top fornecedores (gráfico)", kind: "chart", chartType: "bar", wide: true, data: topSuppliers.map(([s2, c]) => ({ label: s2, value: c })) },
+    { key: "chartHistoryTrend", label: "📊 Histórico (últimos 14 dias)", kind: "chart", chartType: "trend", wide: true, data: historyTrend }
   ];
 }
 function MetricsDashboard({ shipments, deletedShipments, visibleMetrics, setVisibleMetrics }) {
@@ -838,7 +915,13 @@ function MetricsDashboard({ shipments, deletedShipments, visibleMetrics, setVisi
       : e("div", { className: "dd-grid" },
           shown.map((m) => e("div", { key: m.key, style: { ...S.card, ...(m.wide ? { gridColumn: "1 / -1" } : {}) } },
             e("div", { style: S.cardLabel }, m.label),
-            e("div", { style: { fontSize: m.wide ? 16 : 28, fontWeight: 700, fontFamily: m.wide ? sans : mono, color: "#EDEBE6", lineHeight: 1.4 } }, m.value),
+            m.kind === "chart"
+              ? (m.chartType === "donut"
+                  ? e(DonutChartSVG, { data: m.data })
+                  : m.chartType === "trend"
+                  ? e(TrendChartSVG, { data: m.data })
+                  : e(BarChartSVG, { data: m.data }))
+              : e("div", { style: { fontSize: m.wide ? 16 : 28, fontWeight: 700, fontFamily: m.wide ? sans : mono, color: "#EDEBE6", lineHeight: 1.4 } }, m.value),
             m.hint ? e("div", { style: { ...S.hint, marginTop: 8 } }, m.hint) : null
           ))
         )
