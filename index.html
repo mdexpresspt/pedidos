@@ -617,11 +617,26 @@ function bestQuoteId(sh) {
   if (!sh.quotes.length) return null;
   return sh.quotes.reduce((min, q) => q.costPrice < min.costPrice ? q : min, sh.quotes[0]).id;
 }
-function buildMailtoLink(bccEmails, subject, body) {
+const DEFAULT_TO_EMAIL = "ask@mdexpress.pt";
+const COMPANY_SIGNATURE_TEXT = [
+  "MD Express Lda",
+  "Rua Damiana Maria Silva, Lote 7, Sala 1",
+  "4705-087 Ferreiros (BRAGA, PORTUGAL)",
+  "",
+  "Tel. +351 915286937 - Daniel Almeida",
+  "Tel. +351 915286928 - Ilona Natkanska",
+  "Tel. +351 913798351 -  Eduardo Alves",
+  "Tel. +351 913798378 - Bruna Cardoso",
+  "Tel. +351 915286930 \u2013 Fernando Silva",
+  "",
+  "\u201cAs informa\u00e7\u00f5es contidas neste anexo de e-mail e arquivo s\u00e3o confidenciais e devem ser lidas apenas pela pessoa ou entidade a quem s\u00e3o endere\u00e7adas. Se voc\u00ea recebeu esta comunica\u00e7\u00e3o por engano, notifique o remetente e exclua imediatamente a mensagem e os arquivos anexados sem ler, copiar, gravar, distribuir, disseminar ou disseminar qualquer outra informa\u00e7\u00e3o\u201d.",
+].join("\n");
+function buildMailtoLink(bccEmails, subject, body, toEmail) {
+  const to = encodeURIComponent(toEmail || "");
   const bcc = encodeURIComponent(bccEmails.join(","));
   const subj = encodeURIComponent(subject);
   const bod = encodeURIComponent(body);
-  return `mailto:?bcc=${bcc}&subject=${subj}&body=${bod}`;
+  return `mailto:${to}?bcc=${bcc}&subject=${subj}&body=${bod}`;
 }
 function parseEmailsText(text) {
   return Array.from(
@@ -737,7 +752,8 @@ function DispatchDesk() {
   function sendSupplierEmail(sh, messageText) {
     const list = emailLists.find((l) => l.id === selectedEmailListByShipment[sh.id]);
     if (!list || list.emails.length === 0) return;
-    const link = buildMailtoLink(list.emails, buildSupplierEmailSubject(sh), messageText);
+    const fullBody = messageText + "\n\n" + COMPANY_SIGNATURE_TEXT;
+    const link = buildMailtoLink(list.emails, buildSupplierEmailSubject(sh), fullBody, DEFAULT_TO_EMAIL);
     window.location.href = link;
   }
   useEffect(() => {
