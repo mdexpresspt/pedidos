@@ -349,8 +349,6 @@ const STORAGE_KEY = "dispatch-desk-shipments-v1";
 const API_KEY_STORAGE = "dispatch-desk-api-key-v1";
 const VAN_STORAGE = "dispatch-desk-vans-v1";
 const EMAIL_LISTS_STORAGE = "dispatch-desk-email-lists-v1";
-const DELETED_STORAGE = "dispatch-desk-deleted-v1";
-const DASHBOARD_METRICS_STORAGE = "dispatch-desk-dashboard-metrics-v1";
 const emptyShipment = () => ({
   id: uid(),
   label: "",
@@ -666,70 +664,6 @@ function buildFullSummary(shipments) {
 function Field({ label, children }) {
   return /* @__PURE__ */ React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 6 } }, /* @__PURE__ */ React.createElement("label", { style: S.fieldLabel }, label), children);
 }
-function HistoryView({ deletedShipments, restoreShipment, purgeDeletedShipment }) {
-  const e = React.createElement;
-  if (deletedShipments.length === 0) {
-    return e(React.Fragment, null,
-      e("div", { style: S.pageHeading }, "Histórico de pedidos eliminados"),
-      e("div", { style: S.empty }, "Sem pedidos eliminados.")
-    );
-  }
-  return e(React.Fragment, null,
-    e("div", { style: S.pageHeading }, "Histórico de pedidos eliminados"),
-    deletedShipments.map((sh) => {
-      const title = sh.label.trim() || `${sh.pickupLoc || "?"} → ${sh.deliveryLoc || "?"}`;
-      const quoteRows = sh.quotes.length === 0
-        ? e("div", { style: S.hint }, "Sem cotações.")
-        : e("div", { style: S.quoteList },
-            sh.quotes.slice().sort((a, b) => a.costPrice - b.costPrice).map((q) =>
-              e("div", { key: q.id, style: { ...S.quoteRow, cursor: "default" } },
-                e("div", { style: { flex: 1 } },
-                  e("div", { style: S.quoteSupplier }, q.supplier),
-                  (q.pickupTime || q.deliveryTime) && e("div", { style: S.quoteNotes },
-                    q.pickupTime ? `carga: ${q.pickupTime}` : "",
-                    q.pickupTime && q.deliveryTime ? " · " : "",
-                    q.deliveryTime ? `entrega: ${q.deliveryTime}` : ""
-                  )
-                ),
-                e("div", { style: S.quotePriceCol },
-                  e("div", { style: S.quotePrice }, `€${q.costPrice.toLocaleString("en-US")}`),
-                  e("div", { style: S.quotePriceLabel }, "fornecedor"),
-                  q.sellPrice != null ? e(React.Fragment, null,
-                    e("div", { style: { ...S.quotePrice, color: "#5FAE7D" } }, `€${q.sellPrice.toLocaleString("en-US")}`),
-                    e("div", { style: S.quotePriceLabel }, "cliente")
-                  ) : null
-                )
-              )
-            )
-          );
-      return e("div", { key: sh.id, style: S.card },
-        e("div", { style: S.rowBetween },
-          e("div", { style: S.cardLabel }, title),
-          e("div", { style: { display: "flex", gap: 8 } },
-            e("button", { style: S.secondaryBtn, onClick: () => restoreShipment(sh.id) }, "↩️ Restaurar"),
-            e("button", { style: S.iconBtn, onClick: () => purgeDeletedShipment(sh.id) }, "🗑 Eliminar definitivamente")
-          )
-        ),
-        sh.outcome === "accepted"
-          ? e("div", { style: { ...S.badge, ...S.badgeOk, marginTop: 0, marginBottom: 12 } }, "✓ Serviço aceite")
-          : sh.outcome === "rejected"
-          ? e("div", { style: { ...S.badge, ...S.badgeWarn, marginTop: 0, marginBottom: 12 } }, "✕ Serviço não aceite")
-          : null,
-        e("div", { style: S.ticketMeta },
-          e("span", null, `${sh.pickupLoc || "?"} → ${sh.deliveryLoc || "?"}`),
-          e("span", { style: S.dot }, "•"),
-          e("span", null, sh.pickupTime || "sem hora de carga"),
-          e("span", { style: S.dot }, "•"),
-          e("span", null, sh.deliveryTime || "sem hora de entrega")
-        ),
-        sh.cargo ? e("div", { style: { ...S.ticketMeta, marginTop: 4 } }, e("span", null, sh.cargo)) : null,
-        sh.clientName.trim() ? e("div", { style: { ...S.ticketMeta, marginTop: 4 } }, e("span", null, `Cliente: ${sh.clientName.trim()}`)) : null,
-        e("div", { style: S.divider }),
-        quoteRows
-      );
-    })
-  );
-}
 function CopyBtn({ text, label }) {
   const [copied, setCopied] = useState(false);
   async function copy() {
@@ -745,188 +679,759 @@ function CopyBtn({ text, label }) {
 function LangToggle({ value, onChange }) {
   return /* @__PURE__ */ React.createElement("div", { style: S.langToggle }, /* @__PURE__ */ React.createElement("button", { style: { ...S.langBtn, ...value === "pt" ? S.langBtnActive : {} }, onClick: () => onChange("pt") }, "PT"), /* @__PURE__ */ React.createElement("button", { style: { ...S.langBtn, ...value === "en" ? S.langBtnActive : {} }, onClick: () => onChange("en") }, "EN"));
 }
-function ConfirmDeleteModal({ onAccepted, onRejected, onCancel }) {
+function ConfirmDeleteModal({ onConfirm, onCancel }) {
   const e = React.createElement;
   return e("div", { style: S.modalOverlay, onClick: onCancel },
     e("div", { style: S.modalCard, onClick: (ev) => ev.stopPropagation() },
       e("div", { style: S.cardLabel }, "Eliminar pedido"),
-      e("div", { style: { ...S.hint, marginTop: 0, marginBottom: 18 } }, "Antes de mover este pedido para o histórico, indica o resultado:"),
+      e("div", { style: { ...S.hint, marginTop: 0, marginBottom: 18 } }, "Queres mesmo eliminar este pedido? Não pode ser recuperado."),
       e("div", { style: { display: "flex", flexDirection: "column", gap: 10 } },
-        e("button", { style: S.primaryBtn, onClick: onAccepted }, "✓ Serviço aceite"),
-        e("button", { style: S.secondaryBtnWide, onClick: onRejected }, "✕ Serviço não aceite")
-      ),
-      e("button", { style: { ...S.iconBtn, marginTop: 14, width: "100%" }, onClick: onCancel }, "Cancelar")
+        e("button", { style: S.primaryBtn, onClick: onConfirm }, "🗑 Eliminar"),
+        e("button", { style: S.secondaryBtnWide, onClick: onCancel }, "Cancelar")
+      )
     )
   );
 }
-function BarChartSVG({ data, unit }) {
+const PARTNERS_STORAGE = "dispatch-desk-partners-v1";
+const GEO_STORAGE = "dispatch-desk-geocache-v1";
+const _geoFailed = {};
+let _geoLast = 0;
+function todayISO() {
+  return new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 10);
+}
+function formatDatePT(iso) {
+  if (!iso) return "";
+  const p = iso.split("-");
+  return p.length === 3 ? p[2] + "/" + p[1] + "/" + p[0] : iso;
+}
+function loadGeoCache() {
+  try { return JSON.parse(localStorage.getItem(GEO_STORAGE)) || {}; } catch (err) { return {}; }
+}
+// devolve {lat,lon} | null (local não encontrado) | undefined (sem ligação / erro)
+async function geocodePlace(q, cc) {
+  if (!(q || "").trim()) return null;
+  const key = (cc ? cc + "|" : "") + q.trim().toLowerCase();
+  const cache = loadGeoCache();
+  if (cache[key]) return cache[key];
+  if (_geoFailed[key]) return null;
+  const wait = Math.max(0, _geoLast + 1100 - Date.now());
+  _geoLast = Date.now() + wait;
+  if (wait) await new Promise((r) => setTimeout(r, wait));
+  try {
+    const r = await fetch("https://nominatim.openstreetmap.org/search?format=json&limit=1&q=" + encodeURIComponent(q.trim()) + (cc ? "&countrycodes=" + cc : ""));
+    if (!r.ok) throw new Error("geo");
+    const arr = await r.json();
+    if (arr && arr[0]) {
+      const v = { lat: parseFloat(arr[0].lat), lon: parseFloat(arr[0].lon) };
+      cache[key] = v;
+      try { localStorage.setItem(GEO_STORAGE, JSON.stringify(cache)); } catch (err) {}
+      return v;
+    }
+  } catch (err) {
+    return undefined;
+  }
+  _geoFailed[key] = true;
+  return null;
+}
+function distanceKm(a, b) {
+  const R = 6371, rad = Math.PI / 180;
+  const dLat = (b.lat - a.lat) * rad, dLon = (b.lon - a.lon) * rad;
+  const h = Math.sin(dLat / 2) * Math.sin(dLat / 2) + Math.cos(a.lat * rad) * Math.cos(b.lat * rad) * Math.sin(dLon / 2) * Math.sin(dLon / 2);
+  return 2 * R * Math.asin(Math.sqrt(h));
+}
+function availabilityOn(p, date) {
+  return (p.avail || []).find((a) => a.from && a.from <= date && date <= (a.to || a.from)) || null;
+}
+function whatsappLink(phone, text) {
+  let digits = (phone || "").replace(/\D/g, "");
+  if (digits.startsWith("00")) digits = digits.slice(2);
+  if (digits.length === 9) digits = "351" + digits;
+  return "https://wa.me/" + digits + "?text=" + encodeURIComponent(text);
+}
+function PartnersView({ partners, setPartners }) {
   const e = React.createElement;
-  if (!data.length) return e("div", { style: S.hint }, "Sem dados suficientes.");
-  const max = Math.max(...data.map((d) => d.value), 1);
-  return e("div", { style: { display: "flex", flexDirection: "column", gap: 10 } },
-    data.map((d) => e("div", { key: d.label, style: { display: "flex", alignItems: "center", gap: 10 } },
-      e("div", { style: { width: 150, fontSize: 12, color: "#B0B4BA", flexShrink: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } }, d.label),
-      e("div", { style: { flex: 1, background: "#0E1013", borderRadius: 5, height: 18, position: "relative", overflow: "hidden" } },
-        e("div", { style: { width: `${(d.value / max) * 100}%`, background: "#E8A33D", height: "100%", borderRadius: 5, transition: "width .4s ease" } })
+  const blank = { name: "", phone: "", vehicle: "", capacity: "", baseLoc: "", notes: "" };
+  const [form, setForm] = useState(blank);
+  const [editingId, setEditingId] = useState(null);
+  const [availDrafts, setAvailDrafts] = useState({});
+  const today = todayISO();
+  function savePartner() {
+    if (!form.name.trim()) return;
+    if (editingId) setPartners((list) => list.map((p) => p.id === editingId ? { ...p, ...form, name: form.name.trim() } : p));
+    else setPartners((list) => [...list, { id: uid(), ...form, name: form.name.trim(), avail: [] }]);
+    setForm(blank);
+    setEditingId(null);
+  }
+  function editPartner(p) {
+    setEditingId(p.id);
+    setForm({ name: p.name || "", phone: p.phone || "", vehicle: p.vehicle || "", capacity: p.capacity || "", baseLoc: p.baseLoc || "", notes: p.notes || "" });
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+  function cancelEdit() {
+    setForm(blank);
+    setEditingId(null);
+  }
+  function removePartner(p) {
+    if (window.confirm('Remover o parceiro "' + p.name + '"?')) setPartners((list) => list.filter((x) => x.id !== p.id));
+  }
+  function draftOf(id) {
+    return availDrafts[id] || { from: today, to: "", loc: "", note: "" };
+  }
+  function setDraft(id, field, value) {
+    setAvailDrafts((d) => ({ ...d, [id]: { ...(d[id] || { from: today, to: "", loc: "", note: "" }), [field]: value } }));
+  }
+  function addAvail(p) {
+    const d = draftOf(p.id);
+    if (!d.from) return;
+    const to = d.to && d.to >= d.from ? d.to : d.from;
+    const entry = { id: uid(), from: d.from, to, loc: d.loc.trim(), note: d.note.trim() };
+    setPartners((list) => list.map((x) => x.id === p.id ? { ...x, avail: [...(x.avail || []), entry] } : x));
+    setAvailDrafts((m) => ({ ...m, [p.id]: { from: d.from, to: "", loc: "", note: "" } }));
+  }
+  function removeAvail(pid, aid) {
+    setPartners((list) => list.map((x) => x.id === pid ? { ...x, avail: (x.avail || []).filter((a) => a.id !== aid) } : x));
+  }
+  function clearExpired() {
+    setPartners((list) => list.map((x) => ({ ...x, avail: (x.avail || []).filter((a) => (a.to || a.from) >= today) })));
+  }
+  const sorted = partners.slice().sort((a, b) => a.name.localeCompare(b.name));
+  const availToday = partners.filter((p) => availabilityOn(p, today)).length;
+  return e(React.Fragment, null,
+    e("div", { style: S.pageHeading }, "Parceiros e disponibilidades"),
+    e("div", { style: S.card },
+      e("div", { style: S.cardLabel }, editingId ? "Editar parceiro" : "Novo parceiro"),
+      e("div", { style: S.grid2 },
+        e(Field, { label: "Nome" }, e("input", { style: S.input, value: form.name, onChange: (ev) => setForm({ ...form, name: ev.target.value }), placeholder: "ex: Transportes Silva" })),
+        e(Field, { label: "Telemóvel / WhatsApp" }, e("input", { style: S.input, value: form.phone, onChange: (ev) => setForm({ ...form, phone: ev.target.value }), placeholder: "912 345 678" })),
+        e(Field, { label: "Veículo" }, e("input", { style: S.input, value: form.vehicle, onChange: (ev) => setForm({ ...form, vehicle: ev.target.value }), placeholder: "carrinha, camião, trailer..." })),
+        e(Field, { label: "Capacidade" }, e("input", { style: S.input, value: form.capacity, onChange: (ev) => setForm({ ...form, capacity: ev.target.value }), placeholder: "ex: 1200 kg / 8 paletes" })),
+        e(Field, { label: "Zona base (cidade)" }, e("input", { style: S.input, value: form.baseLoc, onChange: (ev) => setForm({ ...form, baseLoc: ev.target.value }), placeholder: "ex: Braga" })),
+        e(Field, { label: "Notas" }, e("input", { style: S.input, value: form.notes, onChange: (ev) => setForm({ ...form, notes: ev.target.value }), placeholder: "ADR, frio, só Espanha..." }))
       ),
-      e("div", { style: { width: 44, fontSize: 12, fontFamily: mono, color: "#EDEBE6", textAlign: "right", flexShrink: 0 } }, `${d.value}${unit || ""}`)
-    ))
+      e("div", { style: { display: "flex", gap: 10 } },
+        e("button", { style: { ...S.primaryBtn, opacity: form.name.trim() ? 1 : 0.45 }, disabled: !form.name.trim(), onClick: savePartner }, editingId ? "Guardar alterações" : "+ Adicionar parceiro"),
+        editingId ? e("button", { style: { ...S.secondaryBtnWide, width: "auto" }, onClick: cancelEdit }, "Cancelar") : null
+      )
+    ),
+    partners.length > 0 ? e("div", { style: { ...S.rowBetween, marginBottom: 14 } },
+      e("div", { style: { ...S.hint, marginTop: 0 } }, partners.length + " parceiro(s) · " + availToday + " disponível(eis) hoje"),
+      e("button", { style: S.iconBtn, onClick: clearExpired }, "🧹 Limpar disponibilidades expiradas")
+    ) : null,
+    sorted.length === 0 ? e("div", { style: S.empty }, "Ainda sem parceiros. Adiciona o primeiro acima.") : sorted.map((p) => {
+      const d = draftOf(p.id);
+      const avail = (p.avail || []).slice().sort((a, b) => a.from.localeCompare(b.from));
+      const freeToday = !!availabilityOn(p, today);
+      return e("div", { key: p.id, style: S.card },
+        e("div", { style: S.rowBetween },
+          e("div", { style: { ...S.cardLabel, marginBottom: 4, color: "#EDEBE6", fontSize: 14, textTransform: "none", letterSpacing: 0 } }, p.name),
+          e("div", { style: { display: "flex", gap: 8 } },
+            e("button", { style: S.iconBtn, onClick: () => editPartner(p) }, "✏️ Editar"),
+            e("button", { style: S.iconBtn, onClick: () => removePartner(p) }, "🗑 Remover")
+          )
+        ),
+        e("div", { style: S.ticketMeta },
+          p.vehicle ? e("span", null, p.vehicle) : null,
+          p.capacity ? e(React.Fragment, null, e("span", { style: S.dot }, "•"), e("span", null, p.capacity)) : null,
+          p.baseLoc ? e(React.Fragment, null, e("span", { style: S.dot }, "•"), e("span", null, "base: " + p.baseLoc)) : null,
+          p.phone ? e(React.Fragment, null, e("span", { style: S.dot }, "•"), e("span", null, p.phone)) : null
+        ),
+        p.notes ? e("div", { style: { ...S.ticketMeta, marginTop: 4 } }, e("span", null, p.notes)) : null,
+        e("div", { style: { ...S.badge, ...(freeToday ? S.badgeOk : {}), ...(freeToday ? {} : { background: "#0E1013", color: "#5F6369" }) } }, freeToday ? "✓ Disponível hoje" : "Sem disponibilidade hoje"),
+        e("div", { style: S.divider }),
+        avail.length > 0 ? e("div", { style: S.quoteList },
+          avail.map((a) => {
+            const expired = (a.to || a.from) < today;
+            return e("div", { key: a.id, style: { ...S.quoteRow, cursor: "default", opacity: expired ? 0.45 : 1 } },
+              e("div", { style: { flex: 1 } },
+                e("div", { style: S.quoteSupplier }, a.from === a.to ? formatDatePT(a.from) : formatDatePT(a.from) + " → " + formatDatePT(a.to), expired ? e("span", { style: { ...S.bestTag, background: "#2A2E33", color: "#8B9098" } }, "expirada") : null),
+                e("div", { style: S.quoteNotes }, "livre em: " + (a.loc || p.baseLoc || "—") + (a.note ? " · " + a.note : ""))
+              ),
+              e("button", { style: S.iconBtnSmall, onClick: () => removeAvail(p.id, a.id) }, "🗑")
+            );
+          })
+        ) : e("div", { style: { ...S.hint, marginTop: 0, marginBottom: 14 } }, "Sem disponibilidades registadas."),
+        e("div", { style: S.addQuoteGrid },
+          e(Field, { label: "Disponível de" }, e("input", { style: S.input, type: "date", value: d.from, onChange: (ev) => setDraft(p.id, "from", ev.target.value) })),
+          e(Field, { label: "até (vazio = só esse dia)" }, e("input", { style: S.input, type: "date", value: d.to, onChange: (ev) => setDraft(p.id, "to", ev.target.value) })),
+          e(Field, { label: "Onde fica livre (vazio = zona base)" }, e("input", { style: S.input, value: d.loc, onChange: (ev) => setDraft(p.id, "loc", ev.target.value), placeholder: p.baseLoc || "ex: Porto" })),
+          e(Field, { label: "Nota (opcional)" }, e("input", { style: S.input, value: d.note, onChange: (ev) => setDraft(p.id, "note", ev.target.value), placeholder: "ex: só de manhã" })),
+          e("button", { style: S.secondaryBtn, onClick: () => addAvail(p) }, "+ Disponibilidade")
+        )
+      );
+    })
   );
 }
-function DonutChartSVG({ data }) {
-  const e = React.createElement;
-  const total = data.reduce((s, d) => s + d.value, 0);
-  const colors = ["#E8A33D", "#5FAE7D", "#D9705A", "#5B8DEF", "#8B9098"];
-  const r = 55, cx = 65, cy = 65, circumference = 2 * Math.PI * r;
-  let cumulative = 0;
-  const segments = total > 0 ? data.filter((d) => d.value > 0).map((d, i) => {
-    const fraction = d.value / total;
-    const dash = fraction * circumference;
-    const seg = e("circle", {
-      key: d.label,
-      cx, cy, r,
-      fill: "none",
-      stroke: colors[i % colors.length],
-      strokeWidth: 20,
-      strokeDasharray: `${dash} ${circumference - dash}`,
-      strokeDashoffset: -cumulative,
-      transform: `rotate(-90 ${cx} ${cy})`,
-      style: { transition: "stroke-dasharray .4s ease" }
-    });
-    cumulative += dash;
-    return seg;
-  }) : [e("circle", { key: "empty", cx, cy, r, fill: "none", stroke: "#2A2E33", strokeWidth: 20 })];
-  return e("div", { style: { display: "flex", alignItems: "center", gap: 22, flexWrap: "wrap" } },
-    e("svg", { viewBox: "0 0 130 130", width: 130, height: 130 }, segments),
-    e("div", { style: { display: "flex", flexDirection: "column", gap: 6 } },
-      data.map((d, i) => e("div", { key: d.label, style: { display: "flex", alignItems: "center", gap: 8, fontSize: 12.5, color: "#B0B4BA" } },
-        e("div", { style: { width: 10, height: 10, borderRadius: 3, background: colors[i % colors.length], flexShrink: 0 } }),
-        e("div", null, `${d.label}: ${d.value}${total > 0 ? ` (${((d.value / total) * 100).toFixed(0)}%)` : ""}`)
-      ))
-    )
-  );
+/* ===== Importação de disponibilidades coladas (WhatsApp) ===== */
+const FLEET_STORAGE = "dispatch-desk-fleet-v1";
+const EU_CC = "AT BE BG CH CY CZ DE DK EE ES FI FR GB GR HR HU IE IT LT LU LV MT NL NO PL PT RO RS SE SI SK UA TR AL BA ME MK MD".split(" ");
+const WEEKDAY_WORDS = [
+  ["sunday", "sun", "domingo"],
+  ["monday", "mon", "segunda-feira", "segunda"],
+  ["tuesday", "tue", "terça-feira", "terca-feira", "terça", "terca"],
+  ["wednesday", "wed", "quarta-feira", "quarta"],
+  ["thursday", "thu", "quinta-feira", "quinta"],
+  ["friday", "fri", "sexta-feira", "sexta"],
+  ["saturday", "sat", "sábado", "sabado"]
+];
+const WEEKDAY_PT = ["dom", "seg", "ter", "qua", "qui", "sex", "sáb"];
+const VEHICLE_WORDS = /van|truck|trailer|box|solo|mega|sprinter|lkw|curtain|reefer|frigo|tautliner|bus|camion|carrinha|camião/i;
+function addDaysISO(iso, n) {
+  const d = new Date(iso + "T00:00:00Z");
+  d.setUTCDate(d.getUTCDate() + n);
+  return d.toISOString().slice(0, 10);
 }
-function TrendChartSVG({ data }) {
-  const e = React.createElement;
-  if (!data.length) return e("div", { style: S.hint }, "Sem dados suficientes.");
-  const max = Math.max(...data.map((d) => d.value), 1);
-  return e("div", { style: { display: "flex", alignItems: "flex-end", gap: 5, height: 150, padding: "10px 2px 0" } },
-    data.map((d, i) => e("div", { key: `${d.label}-${i}`, style: { flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 6, height: "100%", justifyContent: "flex-end" } },
-      e("div", { style: { fontSize: 10.5, color: "#8B9098", fontFamily: mono } }, d.value || ""),
-      e("div", { style: { width: "100%", maxWidth: 22, background: "#E8A33D", borderRadius: "3px 3px 0 0", height: `${(d.value / max) * 100}%`, minHeight: d.value ? 3 : 0, transition: "height .4s ease" } }),
-      e("div", { style: { fontSize: 9.5, color: "#5F6369", whiteSpace: "nowrap" } }, d.label)
-    ))
-  );
+function weekdayOfISO(iso) {
+  return new Date(iso + "T00:00:00Z").getUTCDay();
 }
-function computeDashboardMetrics(shipments, deletedShipments) {
-  const all = [...shipments, ...deletedShipments];
-  const accepted = deletedShipments.filter((sh) => sh.outcome === "accepted");
-  const rejected = deletedShipments.filter((sh) => sh.outcome === "rejected");
-  const decided = accepted.length + rejected.length;
-  const allQuotes = all.flatMap((sh) => sh.quotes || []);
-  const costPrices = allQuotes.map((q) => q.costPrice).filter((n) => typeof n === "number" && !isNaN(n));
-  const sellPrices = allQuotes.filter((q) => q.sellPrice != null).map((q) => q.sellPrice);
-  const margins = allQuotes.filter((q) => q.sellPrice != null).map((q) => q.sellPrice - q.costPrice);
-  const avg = (arr) => arr.length ? arr.reduce((a, b) => a + b, 0) / arr.length : null;
-  const clientNames = new Set(all.map((sh) => sh.clientName && sh.clientName.trim()).filter(Boolean));
-  const routeCounts = {};
-  all.forEach((sh) => {
-    if (sh.pickupLoc || sh.deliveryLoc) {
-      const key = `${sh.pickupLoc || "?"} → ${sh.deliveryLoc || "?"}`;
-      routeCounts[key] = (routeCounts[key] || 0) + 1;
+function shortDatePT(iso) {
+  if (!iso) return "";
+  const p = iso.split("-");
+  return WEEKDAY_PT[weekdayOfISO(iso)] + " " + p[2] + "/" + p[1];
+}
+function dateRangeLabel(from, to) {
+  return !to || from === to ? shortDatePT(from) : shortDatePT(from) + " → " + shortDatePT(to);
+}
+function isoFromParts(d, m, y) {
+  d = +d; m = +m; y = +y;
+  if (y < 100) y += 2000;
+  if (m < 1 || m > 12 || d < 1 || d > 31) return null;
+  return y + "-" + String(m).padStart(2, "0") + "-" + String(d).padStart(2, "0");
+}
+function findWord(str, words) {
+  const list = words.slice().sort((a, b) => b.length - a.length);
+  const re = new RegExp("(^|[^a-zà-ÿ])(" + list.join("|") + ")(?![a-zà-ÿ])", "i");
+  const m = str.match(re);
+  if (!m) return null;
+  const start = m.index + m[1].length;
+  return { word: m[2].toLowerCase(), start, end: start + m[2].length };
+}
+function cutRange(str, start, end) {
+  return str.slice(0, start) + " " + str.slice(end);
+}
+// lê a data do cabeçalho ("... today and next day 14.10.2026") e se a lista vale também para o dia seguinte
+function detectHeader(text) {
+  const out = { date: null, nextDay: false };
+  (text || "").split(/\r?\n/).forEach((ln) => {
+    if (/europal|pallet|palete/i.test(ln)) return;
+    if (/available|dispon/i.test(ln)) {
+      const m = ln.match(/(\d{1,2})[./](\d{1,2})[./](\d{4})/);
+      if (m && !out.date) out.date = isoFromParts(m[1], m[2], m[3]);
+      if (/next\s*day|tomorrow|amanh|dia seguinte/i.test(ln)) out.nextDay = true;
     }
   });
-  const topRoutes = Object.entries(routeCounts).sort((a, b) => b[1] - a[1]).slice(0, 5);
-  const supplierCounts = {};
-  allQuotes.forEach((q) => {
-    if (q.supplier) supplierCounts[q.supplier] = (supplierCounts[q.supplier] || 0) + 1;
-  });
-  const topSuppliers = Object.entries(supplierCounts).sort((a, b) => b[1] - a[1]).slice(0, 5);
-  const customsCounts = { yes: 0, no: 0, unspecified: 0 };
-  all.forEach((sh) => {
-    const c = sh.customs || "unspecified";
-    customsCounts[c] = (customsCounts[c] || 0) + 1;
-  });
-  const withoutQuotes = all.filter((sh) => !sh.quotes || sh.quotes.length === 0).length;
-  const now = Date.now();
-  const dayBuckets = [];
-  for (let i = 13; i >= 0; i--) {
-    const d = new Date(now - i * 86400000);
-    dayBuckets.push({ key: d.toISOString().slice(0, 10), label: `${d.getDate()}/${d.getMonth() + 1}` });
-  }
-  const countByDay = {};
-  deletedShipments.forEach((sh) => {
-    if (!sh.deletedAt) return;
-    const key = new Date(sh.deletedAt).toISOString().slice(0, 10);
-    countByDay[key] = (countByDay[key] || 0) + 1;
-  });
-  const historyTrend = dayBuckets.map((d) => ({ label: d.label, value: countByDay[d.key] || 0 }));
-  return [
-    { key: "total", label: "Total de pedidos", value: all.length },
-    { key: "active", label: "Pedidos ativos", value: shipments.length },
-    { key: "history", label: "Pedidos no histórico", value: deletedShipments.length },
-    { key: "accepted", label: "Serviços aceites", value: accepted.length },
-    { key: "rejected", label: "Serviços não aceites", value: rejected.length },
-    { key: "acceptRate", label: "Taxa de aceitação", value: decided ? `${((accepted.length / decided) * 100).toFixed(0)}%` : "—", hint: decided ? `${accepted.length} de ${decided} pedidos decididos` : "Sem pedidos decididos ainda" },
-    { key: "totalQuotes", label: "Total de cotações recebidas", value: allQuotes.length },
-    { key: "avgQuotesPerShipment", label: "Média de cotações por pedido", value: all.length ? (allQuotes.length / all.length).toFixed(1) : "0" },
-    { key: "noQuotes", label: "Pedidos sem cotações", value: withoutQuotes },
-    { key: "avgCost", label: "Preço médio de compra (fornecedor)", value: avg(costPrices) != null ? `€${avg(costPrices).toFixed(2)}` : "—" },
-    { key: "avgSell", label: "Preço médio de venda (cliente)", value: avg(sellPrices) != null ? `€${avg(sellPrices).toFixed(2)}` : "—" },
-    { key: "avgMargin", label: "Margem média por cotação", value: avg(margins) != null ? `€${avg(margins).toFixed(2)}` : "—" },
-    { key: "totalMargin", label: "Margem total estimada", value: margins.length ? `€${margins.reduce((a, b) => a + b, 0).toFixed(2)}` : "—" },
-    { key: "uniqueClients", label: "Clientes únicos", value: clientNames.size },
-    { key: "customsYes", label: "Pedidos com customs necessário", value: customsCounts.yes },
-    { key: "customsNo", label: "Pedidos sem customs", value: customsCounts.no },
-    { key: "customsUnspecified", label: "Customs por confirmar", value: customsCounts.unspecified },
-    { key: "topRoutes", label: "Rotas mais frequentes", value: topRoutes.length ? topRoutes.map(([r, c]) => `${r} (${c})`).join("  ·  ") : "—", wide: true },
-    { key: "topSuppliers", label: "Fornecedores mais cotados", value: topSuppliers.length ? topSuppliers.map(([s2, c]) => `${s2} (${c})`).join("  ·  ") : "—", wide: true },
-    { key: "chartAcceptance", label: "📊 Aceites vs não aceites", kind: "chart", chartType: "donut", wide: true, data: [{ label: "Aceites", value: accepted.length }, { label: "Não aceites", value: rejected.length }] },
-    { key: "chartCustoms", label: "📊 Distribuição de customs", kind: "chart", chartType: "donut", wide: true, data: [{ label: "Necessário", value: customsCounts.yes }, { label: "Não necessário", value: customsCounts.no }, { label: "Por confirmar", value: customsCounts.unspecified }] },
-    { key: "chartTopRoutes", label: "📊 Top rotas (gráfico)", kind: "chart", chartType: "bar", wide: true, data: topRoutes.map(([r, c]) => ({ label: r, value: c })) },
-    { key: "chartTopSuppliers", label: "📊 Top fornecedores (gráfico)", kind: "chart", chartType: "bar", wide: true, data: topSuppliers.map(([s2, c]) => ({ label: s2, value: c })) },
-    { key: "chartHistoryTrend", label: "📊 Histórico (últimos 14 dias)", kind: "chart", chartType: "trend", wide: true, data: historyTrend }
-  ];
+  return out;
 }
-function MetricsDashboard({ shipments, deletedShipments, visibleMetrics, setVisibleMetrics }) {
-  const e = React.createElement;
-  const metrics = computeDashboardMetrics(shipments, deletedShipments);
-  const isVisible = (key) => !visibleMetrics || visibleMetrics[key] !== false;
-  function toggle(key) {
-    setVisibleMetrics((prev) => {
-      const base = prev || {};
-      const current = base[key] !== false;
-      return { ...base, [key]: !current };
-    });
+/* ===== Leitor versátil de listas de disponibilidade ===== */
+const COUNTRY_WORDS = {
+  germany: "DE", deutschland: "DE", alemanha: "DE", spain: "ES", espana: "ES", "españa": "ES", espanha: "ES",
+  france: "FR", "frança": "FR", franca: "FR", italy: "IT", italia: "IT", "itália": "IT", portugal: "PT",
+  poland: "PL", polska: "PL", "polónia": "PL", polonia: "PL", romania: "RO", "românia": "RO", "roménia": "RO", romenia: "RO",
+  netherlands: "NL", holland: "NL", belgium: "BE", belgique: "BE", "bélgica": "BE", belgica: "BE",
+  austria: "AT", "áustria": "AT", hungary: "HU", hungria: "HU", czechia: "CZ", czech: "CZ", chequia: "CZ",
+  slovakia: "SK", eslováquia: "SK", switzerland: "CH", "suíça": "CH", suica: "CH", england: "GB", britain: "GB",
+  sweden: "SE", "suécia": "SE", denmark: "DK", dinamarca: "DK", bulgaria: "BG", "bulgária": "BG", greece: "GR", "grécia": "GR",
+  croatia: "HR", "croácia": "HR", slovenia: "SI", "eslovénia": "SI", lithuania: "LT", latvia: "LV", estonia: "EE",
+  finland: "FI", ireland: "IE", irlanda: "IE", luxembourg: "LU", luxemburgo: "LU", norway: "NO", noruega: "NO", serbia: "RS", "sérvia": "RS"
+};
+// devolve {from, to, s} com a data encontrada no texto (dd.mm.aaaa, dd.mm, tomorrow/amanhã, today/hoje, dia da semana) removida de s
+function extractDate(s, base) {
+  let from = null, to = null, dm;
+  dm = s.match(/(\d{1,2})[./](\d{1,2})[./](\d{4}|\d{2})(?!\d)/);
+  if (dm) {
+    const iso = isoFromParts(dm[1], dm[2], dm[3]);
+    if (iso) { from = to = iso; s = s.replace(dm[0], " "); }
   }
-  const shown = metrics.filter((m) => isVisible(m.key));
+  if (!from) {
+    dm = s.match(/(^|[^\d])(\d{1,2})[./](\d{1,2})(?![\d./])/);
+    if (dm) {
+      const iso = isoFromParts(dm[2], dm[3], base.slice(0, 4));
+      if (iso) { from = to = iso; s = s.replace(dm[0], dm[1] + " "); }
+    }
+  }
+  if (!from) {
+    const w = findWord(s, ["tomorrow", "amanhã", "amanha", "morgen"]);
+    if (w) { from = to = addDaysISO(base, 1); s = cutRange(s, w.start, w.end); }
+  }
+  if (!from) {
+    const w = findWord(s, ["today", "hoje", "heute"]);
+    if (w) { from = to = base; s = cutRange(s, w.start, w.end); }
+  }
+  if (!from) {
+    const all = [];
+    WEEKDAY_WORDS.forEach((names, idx) => names.forEach((n) => all.push([n, idx])));
+    const w = findWord(s, all.map((x) => x[0]));
+    if (w) {
+      const idx = all.find((x) => x[0] === w.word)[1];
+      let d = base;
+      for (let i = 0; i < 7 && weekdayOfISO(d) !== idx; i++) d = addDaysISO(d, 1);
+      from = to = d;
+      s = cutRange(s, w.start, w.end);
+    }
+  }
+  return { from, to, s };
+}
+
+/* ===== Cidades europeias (para deduzir o país quando só vem a cidade) ===== */
+const CITY_LISTS = {
+  DE: "berlin,hamburg,munich,munchen,frankfurt,frankfurt am main,cologne,koln,stuttgart,dusseldorf,dortmund,essen,leipzig,bremen,dresden,hannover,hanover,nuremberg,nurnberg,duisburg,bochum,wuppertal,bielefeld,bonn,munster,mannheim,karlsruhe,augsburg,wiesbaden,aschaffenburg,kassel,kiel,lubeck,rostock,erfurt,magdeburg,freiburg,mainz,osnabruck,ulm,regensburg,ingolstadt,wurzburg,bremerhaven,heilbronn,pforzheim,gottingen,braunschweig,chemnitz,halle,oldenburg,paderborn,hagen,krefeld,oberhausen,gelsenkirchen,neuss,offenbach,darmstadt,koblenz,trier,saarbrucken,salzgitter,wolfsburg,passau,bamberg,bayreuth,hof,zwickau,potsdam,schwerin",
+  ES: "madrid,barcelona,valencia,sevilla,seville,zaragoza,malaga,bilbao,murcia,alicante,valladolid,vigo,gijon,vitoria,pamplona,san sebastian,salamanca,tarazona,burgos,leon,tarragona,girona,gerona,lleida,cordoba,granada,santander,toledo,logrono,badajoz,irun,almeria,huelva,cadiz,jerez,albacete,castellon,oviedo,la coruna,a coruna,lugo,ourense,pontevedra,merida,caceres,guadalajara,segovia,avila,palencia,zamora,soria,huesca,teruel,calatayud,tudela,getafe,alcala de henares,illescas,martorell,sant cugat,mollet,sabadell,terrassa,figueres,reus",
+  FR: "paris,lyon,marseille,toulouse,nice,nantes,strasbourg,montpellier,bordeaux,lille,rennes,reims,orly,maubeuge,maubauge,le havre,dijon,grenoble,metz,nancy,mulhouse,rouen,orleans,tours,angers,clermont-ferrand,clermont ferrand,perpignan,calais,avignon,le mans,caen,amiens,limoges,poitiers,besancon,brest,nimes,toulon,cherbourg,valenciennes,dunkerque,dunkirk,roissy,saint-etienne,saint etienne,la rochelle,pau,bayonne,tarbes,troyes,annecy,chambery,lens,arras,douai,roubaix,tourcoing,evry,creteil,nanterre",
+  IT: "roma,rome,milano,milan,torino,turin,napoli,naples,bologna,firenze,florence,genova,genoa,verona,padova,padua,venezia,venice,brescia,bergamo,parma,piacenza,modena,trieste,bari,palermo,catania,udine,trento,bolzano,ancona,perugia,pescara,cagliari,reggio emilia,vicenza,treviso,novara,como,monza,cremona,mantova,ravenna,rimini,livorno,pisa,lucca,prato,taranto,foggia",
+  PT: "lisboa,lisbon,porto,braga,faro,coimbra,aveiro,setubal,leiria,viseu,guimaraes,santarem,evora,vila nova de gaia,matosinhos,maia,amadora,almada,sines,viana do castelo,vila real,guarda,castelo branco,tomar,torres vedras,loures,barreiro",
+  NL: "amsterdam,rotterdam,utrecht,eindhoven,den haag,the hague,venlo,breda,tilburg,groningen,almere,nijmegen,arnhem,apeldoorn,enschede,zwolle,maastricht,roosendaal,schiphol,born,tiel,oss,venray,heerlen",
+  BE: "brussels,bruxelles,brussel,antwerp,antwerpen,anvers,gent,ghent,liege,charleroi,bruges,brugge,leuven,mechelen,genk,namur,mons,aalst,kortrijk,hasselt,ostend,oostende,zeebrugge,tournai,verviers,zaventem",
+  PL: "warsaw,warszawa,krakow,poznan,wroclaw,gdansk,lodz,katowice,szczecin,lublin,bialystok,bydgoszcz,torun,gdynia,rzeszow,kielce,opole,gliwice,zabrze,sosnowiec,czestochowa,radom,olsztyn,zielona gora,gorzow,legnica,walbrzych,tychy,bielsko-biala,bielsko biala",
+  RO: "bucharest,bucuresti,timisoara,cluj-napoca,cluj napoca,cluj,brasov,iasi,constanta,arad,oradea,albota,sibiu,craiova,galati,ploiesti,pitesti,bacau,targu mures,baia mare,satu mare,suceava,deva,alba iulia,ramnicu valcea,buzau,braila,piatra neamt",
+  CZ: "prague,praha,brno,ostrava,plzen,liberec,olomouc,pardubice,hradec kralove,ceske budejovice,usti nad labem,zlin,jihlava,karlovy vary",
+  AT: "vienna,wien,graz,linz,salzburg,innsbruck,klagenfurt,villach,wels,sankt polten,st polten,dornbirn,bregenz,wiener neustadt",
+  HU: "budapest,gyor,debrecen,szeged,miskolc,pecs,kecskemet,szekesfehervar,nyiregyhaza,sopron,veszprem,tatabanya",
+  CH: "zurich,basel,bern,geneva,geneve,lausanne,lugano,winterthur,luzern,lucerne,st gallen,sankt gallen,biel",
+  SK: "bratislava,kosice,zilina,nitra,presov,trnava,banska bystrica",
+  GB: "london,manchester,birmingham,leeds,liverpool,glasgow,edinburgh,bristol,sheffield,newcastle,nottingham,leicester,coventry,cardiff,belfast,southampton,dover,felixstowe,hull",
+  SE: "stockholm,gothenburg,goteborg,malmo,uppsala,vasteras,orebro,linkoping,helsingborg,jonkoping,norrkoping,lund",
+  DK: "copenhagen,kobenhavn,aarhus,odense,aalborg,esbjerg,kolding,vejle,horsens,roskilde",
+  BG: "sofia,plovdiv,varna,burgas,ruse,stara zagora,pleven",
+  GR: "athens,thessaloniki,patras,heraklion,larissa,volos",
+  HR: "zagreb,split,rijeka,osijek,zadar,slavonski brod",
+  SI: "ljubljana,maribor,celje,koper,kranj",
+  LT: "vilnius,kaunas,klaipeda,siauliai,panevezys",
+  LV: "riga,daugavpils,liepaja,jelgava",
+  EE: "tallinn,tartu,narva,parnu",
+  FI: "helsinki,tampere,turku,oulu,espoo,vantaa",
+  IE: "dublin,cork,limerick,galway,waterford",
+  LU: "luxembourg,esch-sur-alzette,esch sur alzette",
+  NO: "oslo,bergen,trondheim,stavanger,drammen,kristiansand",
+  RS: "belgrade,beograd,novi sad,nis,subotica"
+};
+const CITY_CC = {};
+Object.keys(CITY_LISTS).forEach((cc) => CITY_LISTS[cc].split(",").forEach((c) => { if (!CITY_CC[c]) CITY_CC[c] = cc; }));
+function normPlace(s) {
+  return String(s || "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/\s+/g, " ").trim();
+}
+function inferCC(city) {
+  const n = normPlace(city);
+  if (!n) return "";
+  if (CITY_CC[n]) return CITY_CC[n];
+  const first = n.split(/[ ,\-]/)[0];
+  return first.length >= 4 && CITY_CC[first] ? CITY_CC[first] : "";
+}
+const STOP_WORDS = /^(bom|boa|good|hello|hi|hey|ol[aá]|hola|dear|best|kind|regards|obrigad|thanks?|thank|available|dispon|cars?|vehicles?|ve[ií]culos|carrinhas|list|lista|today|hoje|tomorrow|amanh|please|cumprimentos|atenciosamente|total|nota|note|info)/i;
+
+function parseVehicleLine(raw, base, def, listMode) {
+  let s = (raw || "").replace(/ /g, " ").replace(/^\s*\[[^\]]*\]\s*[^:\[\]]{1,40}:\s*/, "").trim();
+  if (!s || /:\s*$/.test(s)) return null;
+  let flagCC = null, truncated = false;
+  if (/…|\.\.\.|ler mais|read more/i.test(s)) {
+    truncated = true;
+    s = s.replace(/(…|\.\.\.)?\s*(ler mais|read more)\s*$/i, "");
+  }
+  s = s.replace(/[\u{1F1E6}-\u{1F1FF}]{2}/gu, (m) => {
+    flagCC = String.fromCharCode(...Array.from(m).map((c) => c.codePointAt(0) - 0x1F1E6 + 65));
+    return " ";
+  });
+  s = s.replace(/\(\s*flag\s*:[\s:]*([a-z]{2})?\s*\)/gi, (m, c) => { if (c) flagCC = c.toUpperCase(); return " "; });
+  s = s.replace(/:?flag[-_:]\s*([a-z]{2}):?/gi, (m, c) => { flagCC = c.toUpperCase(); return " "; });
+  // matrícula / identificação do veículo
+  let ref = "";
+  s = s.replace(/(^|[\s(])(\(?)\s*([A-Z]{2})\s?(\d{1,3})\s?([A-Z]{2,4})\s*(\)?)(?=$|[\s,;)])/g, (m, pre, op, a, n, c) => {
+    if (ref) return m;
+    if (EU_CC.includes(a) && !op) return m;
+    ref = a + " " + String(n).padStart(2, "0") + " " + c;
+    return pre + " ";
+  });
+  // tipo de veículo (opcional)
+  let type = "";
+  const tm = s.match(/^[\s\-–•*]*([A-Za-zÀ-ÿ][A-Za-zÀ-ÿ \/+]*?)\s*(?=\()/);
+  if (tm && VEHICLE_WORDS.test(tm[1])) {
+    type = tm[1].trim();
+    s = s.slice(tm[0].length);
+  }
+  if (!type) {
+    const vm = s.match(/(^|[^A-Za-zÀ-ÿ])(box\s?van|sprinter|vans?|solo|mega|trailer|truck|lkw|curtain(?:sider)?|reefer|tautliner|carrinha|camião)(?![A-Za-zÀ-ÿ])/i);
+    if (vm) { type = vm[2].replace(/\s+/g, " "); s = s.replace(vm[0], vm[1] + " "); }
+  }
+  // paletes e toneladas
+  let pallets = null, payload = null;
+  const pm = s.match(/\(?\s*(\d+)\s*(?:x\s*)?(?:euro\s?pal\w*|europ\w*|paletes?|pallets?|palets?|plts?|pal)(?![A-Za-zÀ-ÿ])\s*\)?/i);
+  if (pm) { pallets = parseInt(pm[1], 10); s = s.replace(pm[0], " "); }
+  const wm = s.match(/(\d+(?:[.,]\d+)?)\s*(kg|t|ton|tons|tonnes)\b/i);
+  if (wm) {
+    let v = parseFloat(wm[1].replace(",", "."));
+    if (/kg/i.test(wm[2])) v = v / 1000;
+    payload = v;
+    s = s.replace(wm[0], " ");
+  }
+  // data da própria linha (senão usa a da secção / cabeçalho)
+  const dt = extractDate(s, base);
+  s = dt.s;
+  const from = dt.from || def.from;
+  const to = dt.from ? dt.to : def.to;
+  // notas entre parêntesis (ex: "(taho)")
+  const notes = [];
+  s = s.replace(/\(([^()]*)\)/g, (m, inner) => { const t = inner.trim(); if (t) notes.push(t); return " "; });
+  s = s.replace(/[()]/g, " ");
+  // país escrito por extenso (Germany, Espanha...)
+  let wordCC = "";
+  const cw = findWord(s, Object.keys(COUNTRY_WORDS));
+  if (cw) { wordCC = COUNTRY_WORDS[cw.word]; s = cutRange(s, cw.start, cw.end); }
+  // localização
+  let cc = "", postal = "", city = "", guess = false;
+  const re = new RegExp("(^|[^A-Za-z])(" + EU_CC.join("|") + ")\\s*[-–]?\\s*(\\d{2,6}(?:\\s?[A-Z]{2}(?![A-Za-z]))?)?\\s*([A-Za-zÀ-ÿ][A-Za-zÀ-ÿ.'’ \\-]*)");
+  const lm = s.match(re);
+  if (lm) {
+    cc = lm[2];
+    postal = (lm[3] || "").trim();
+    city = (lm[4] || "").replace(/[\s\-.,]+$/, "").replace(/\s+/g, " ").trim();
+  } else {
+    // sem código de país: só cidade (precisa de um sinal forte de que é uma linha de veículo)
+    const pcm = s.match(/(^|[^\d])(\d{4,6})(?!\d)/);
+    if (pcm) postal = pcm[2];
+    const rest = pcm ? s.replace(pcm[2], " ") : s;
+    const cm = rest.match(/[A-Za-zÀ-ÿ][A-Za-zÀ-ÿ.'’ \-]*[A-Za-zÀ-ÿ]/);
+    city = cm ? cm[0].replace(/\s+/g, " ").trim() : "";
+    const strong = pallets != null || payload != null || !!ref || !!type;
+    if (!strong && !inferCC(city)) {
+      if (!listMode || STOP_WORDS.test(city) || city.split(/\s+/).length > 4) return null;
+      guess = true;
+    }
+  }
+  if (!city || city.length < 2) return null;
+  return { type, pallets, payload, cc: cc || wordCC || flagCC || "", postal, city, ref, from, to, note: notes.join(" · "), truncated, guess };
+}
+function parseAvailabilityText(text, base, opts) {
+  opts = opts || {};
+  const head = detectHeader(text);
+  const rows = [], skipped = [];
+  const all = (text || "").split(/\r?\n/).map((l) => l.trim()).filter((l) => l && !/^\d{1,2}:\d{2}$/.test(l));
+  const listMode = all.length >= 2 && all.filter((l) => l.length <= 60).length >= all.length * 0.6;
+  const spanN = opts.span === undefined || opts.span === "auto" ? (head.nextDay ? 1 : 0) : parseInt(opts.span, 10) || 0;
+  let sect = null;
+  all.forEach((t) => {
+    const def = sect || { from: base, to: addDaysISO(base, spanN) };
+    const row = parseVehicleLine(t, base, def, listMode);
+    if (row) {
+      if (!row.cc) row.cc = inferCC(row.city) || opts.defaultCC || "";
+      rows.push(row);
+      return;
+    }
+    const isHeader = /available|dispon/i.test(t) && !/europal|pallet|palete/i.test(t);
+    // linha de título com um dia ("Friday 16.10:", "Tomorrow") aplica-se às linhas seguintes
+    if (t.length <= 90 && (!isHeader || /:\s*$/.test(t))) {
+      const d = extractDate(t, base);
+      if (d.from) {
+        const multi = /next\s*day|and tomorrow|\+\s*1|dia seguinte|e amanh/i.test(t);
+        sect = { from: d.from, to: multi ? addDaysISO(d.from, 1) : d.to };
+        return;
+      }
+    }
+    if (!isHeader) skipped.push(t);
+  });
+  return { rows, skipped, head, spanN };
+}
+async function geocodeVehicle(f) {
+  const cc = (f.cc || "").toLowerCase() || undefined;
+  const pc = f.postal && f.postal.replace(/\D/g, "").length >= 4 ? f.postal : "";
+  if (pc) {
+    const r = await geocodePlace(pc + " " + f.city, cc);
+    if (r || r === undefined) return r;
+  }
+  return geocodePlace(f.city, cc);
+}
+function fleetLocLabel(f) {
+  return [f.cc, f.postal, f.city].filter(Boolean).join(" ");
+}
+function CopyMini({ text, label }) {
+  const e = React.createElement;
+  const [ok, setOk] = useState(false);
+  return e("button", {
+    style: { ...S.iconBtn, marginLeft: 8 },
+    onClick: async () => {
+      try {
+        await navigator.clipboard.writeText(text);
+        setOk(true);
+        setTimeout(() => setOk(false), 1500);
+      } catch (err) {}
+    }
+  }, ok ? "✓ Copiado" : "📋 " + (label || "Copiar"));
+}
+function FleetView({ fleet, setFleet, partners, setPartners }) {
+  const e = React.createElement;
+  const today = todayISO();
+  const [text, setText] = useState("");
+  const [source, setSource] = useState("");
+  const [base, setBase] = useState(today);
+  const [replaceOld, setReplaceOld] = useState(true);
+  const [dropped, setDropped] = useState({});
+  const [edits, setEdits] = useState({});
+  const [span, setSpan] = useState("auto");
+  const [defCC, setDefCC] = useState("");
+  const parsed = React.useMemo(() => parseAvailabilityText(text, base, { span, defaultCC: defCC.trim().toUpperCase().slice(0, 2) }), [text, base, span, defCC]);
+  const rowsEff = parsed.rows.map((r, i) => ({ ...r, ...(edits[i] || {}) }));
+  const keptRows = rowsEff.filter((r, i) => !dropped[i]);
+  const mini = { ...S.input, padding: "6px 8px", fontSize: 12.5 };
+  function resetEdits() {
+    setDropped({});
+    setEdits({});
+  }
+  function setEdit(i, patch) {
+    setEdits((m) => ({ ...m, [i]: { ...(m[i] || {}), ...patch } }));
+  }
+  function onPaste(v) {
+    setText(v);
+    resetEdits();
+    const h = detectHeader(v);
+    if (h.date) setBase(h.date);
+  }
+  function onBase(v) {
+    setBase(v);
+    resetEdits();
+  }
+  function save() {
+    if (!keptRows.length) return;
+    const name = source.trim();
+    let pid = null;
+    if (name) {
+      const found = partners.find((p) => p.name.trim().toLowerCase() === name.toLowerCase());
+      if (found) pid = found.id;
+      else {
+        pid = uid();
+        const np = { id: pid, name, phone: "", vehicle: "", capacity: "", baseLoc: "", notes: "", avail: [] };
+        setPartners((l) => [...l, np]);
+      }
+    }
+    const stamp = Date.now();
+    const newRows = keptRows.map((r) => {
+      const { truncated, guess, ...rest } = r;
+      return { id: uid(), partnerId: pid, sourceName: name, ...rest, importedAt: stamp };
+    });
+    setFleet((list) => {
+      const kept = replaceOld && name ? list.filter((f) => (f.sourceName || "").trim().toLowerCase() !== name.toLowerCase()) : list;
+      return [...kept, ...newRows];
+    });
+    setText("");
+    resetEdits();
+  }
+  function removeFleet(id) {
+    setFleet((l) => l.filter((f) => f.id !== id));
+  }
+  function editLoc(f) {
+    const v = window.prompt("Localização (ex: 28307 Bremen)", [f.postal, f.city].filter(Boolean).join(" "));
+    if (!v || !v.trim()) return;
+    setFleet((l) => l.map((x) => x.id === f.id ? { ...x, postal: "", city: v.trim(), lat: null, lon: null, geoFail: false } : x));
+  }
+  function clearExpired() {
+    setFleet((l) => l.filter((f) => f.to >= today));
+  }
+  function clearAll() {
+    if (window.confirm("Apagar TODAS as disponibilidades importadas?")) setFleet([]);
+  }
+  const active = fleet.filter((f) => f.to >= today).sort((a, b) => a.from.localeCompare(b.from) || (a.cc || "").localeCompare(b.cc || "") || (a.city || "").localeCompare(b.city || ""));
+  const expired = fleet.length - active.length;
+  const located = active.filter((f) => f.lat != null).length;
+  const pill = { ...S.bestTag, background: "#2A2E33", color: "#B0B4BA" };
   return e(React.Fragment, null,
-    e("div", { style: S.pageHeading }, "Dashboard"),
-    e("div", { style: { ...S.hint, marginTop: 0 } }, "Clica numa métrica para a mostrar ou esconder no dashboard."),
-    e("div", { style: { display: "flex", flexWrap: "wrap", gap: 8, margin: "14px 0 24px" } },
-      metrics.map((m) => e("button", {
-        key: m.key,
-        style: isVisible(m.key) ? { ...S.iconBtn, background: "#E8A33D", color: "#0E1013", border: "1px solid #E8A33D" } : S.iconBtn,
-        onClick: () => toggle(m.key)
-      }, m.label))
-    ),
-    shown.length === 0
-      ? e("div", { style: S.empty }, "Nenhuma métrica selecionada. Clica numa das opções acima para a mostrar.")
-      : e("div", { className: "dd-grid" },
-          shown.map((m) => e("div", { key: m.key, style: { ...S.card, ...(m.wide ? { gridColumn: "1 / -1" } : {}) } },
-            e("div", { style: S.cardLabel }, m.label),
-            m.kind === "chart"
-              ? (m.chartType === "donut"
-                  ? e(DonutChartSVG, { data: m.data })
-                  : m.chartType === "trend"
-                  ? e(TrendChartSVG, { data: m.data })
-                  : e(BarChartSVG, { data: m.data }))
-              : e("div", { style: { fontSize: m.wide ? 16 : 28, fontWeight: 700, fontFamily: m.wide ? sans : mono, color: "#EDEBE6", lineHeight: 1.4 } }, m.value),
-            m.hint ? e("div", { style: { ...S.hint, marginTop: 8 } }, m.hint) : null
-          ))
+    e("div", { style: S.pageHeading }, "Disponibilidades dos parceiros"),
+    e("div", { style: S.card },
+      e("div", { style: S.cardLabel }, "Colar lista (WhatsApp)"),
+      e("textarea", {
+        style: S.textarea,
+        rows: 9,
+        value: text,
+        onChange: (ev) => onPaste(ev.target.value),
+        placeholder: "Cola aqui a lista de carrinhas disponíveis, tal como o parceiro a envia...\nex: -box van (3 europal)-2,4 t ES-50500 Tarazona (AG 04 LDV)\nou simplesmente: Bremen 3 paletes amanhã"
+      }),
+      e("div", { style: S.grid2 },
+        e(Field, { label: "Parceiro / origem da lista" },
+          e("input", { style: S.input, list: "partner-names", value: source, onChange: (ev) => setSource(ev.target.value), placeholder: "ex: nome do parceiro" }),
+          e("datalist", { id: "partner-names" }, partners.map((p) => e("option", { key: p.id, value: p.name })))
+        ),
+        e(Field, { label: "Data da lista (para 'hoje', 'sexta'...)" },
+          e("input", { style: S.input, type: "date", value: base, onChange: (ev) => onBase(ev.target.value) })
+        ),
+        e(Field, { label: "Linhas sem dia indicado ficam válidas" },
+          e("select", { style: S.input, value: span, onChange: (ev) => { setSpan(ev.target.value); } },
+            e("option", { value: "auto" }, "Automático (pelo cabeçalho)"),
+            e("option", { value: "0" }, "Só no dia da lista"),
+            e("option", { value: "1" }, "Dia da lista + 1 dia"),
+            e("option", { value: "2" }, "Dia da lista + 2 dias"),
+            e("option", { value: "3" }, "Dia da lista + 3 dias"))
+        ),
+        e(Field, { label: "País por defeito (se não indicado nem reconhecido)" },
+          e("input", { style: S.input, value: defCC, maxLength: 2, onChange: (ev) => setDefCC(ev.target.value.toUpperCase()), placeholder: "ex: ES" })
         )
+      ),
+      e("label", { style: { display: "flex", alignItems: "center", gap: 8, fontSize: 12.5, color: "#B0B4BA", marginBottom: 4 } },
+        e("input", { type: "checkbox", checked: replaceOld, onChange: (ev) => setReplaceOld(ev.target.checked) }),
+        "Substituir a lista anterior deste parceiro (recomendado: as listas são reenviadas todos os dias)"
+      ),
+      text.trim() ? e("div", { style: S.divider }) : null,
+      text.trim() ? e("div", { style: S.cardLabel }, "Pré-visualização: " + keptRows.length + " veículo(s) (podes corrigir qualquer campo)") : null,
+      text.trim() && parsed.rows.length > 0 ? e("div", { style: { ...S.hint, marginTop: 0, marginBottom: 12 } }, "Linhas sem dia indicado: " + (parsed.spanN > 0 ? "válidas do dia da lista até +" + parsed.spanN + " dia(s)" : "válidas só no dia da lista") + (span === "auto" && parsed.head && parsed.head.nextDay ? " (o cabeçalho diz 'hoje e dia seguinte')" : "") + ".") : null,
+      keptRows.length > 0 ? e("div", { style: S.quoteList },
+        rowsEff.map((r, i) => dropped[i] ? null : e("div", { key: i, style: { ...S.quoteRow, cursor: "default", flexDirection: "column", alignItems: "stretch", gap: 6 } },
+          e("div", { style: { display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" } },
+            e("input", { style: { ...mini, width: 46 }, value: r.cc || "", maxLength: 2, placeholder: "País", onChange: (ev) => setEdit(i, { cc: ev.target.value.toUpperCase() }) }),
+            e("input", { style: { ...mini, width: 84 }, value: r.postal || "", placeholder: "C. postal", onChange: (ev) => setEdit(i, { postal: ev.target.value }) }),
+            e("input", { style: { ...mini, flex: 1, minWidth: 120 }, value: r.city || "", placeholder: "Cidade", onChange: (ev) => setEdit(i, { city: ev.target.value }) }),
+            e("button", { style: S.iconBtnSmall, title: "Ignorar esta linha", onClick: () => setDropped({ ...dropped, [i]: true }) }, "✕")
+          ),
+          e("div", { style: { display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" } },
+            e("input", { type: "date", style: { ...mini, width: 136 }, value: r.from || "", onChange: (ev) => setEdit(i, { from: ev.target.value, to: r.to && r.to >= ev.target.value ? r.to : ev.target.value }) }),
+            e("span", { style: { color: "#8B9098", fontSize: 12 } }, "→"),
+            e("input", { type: "date", style: { ...mini, width: 136 }, value: r.to || "", min: r.from || undefined, onChange: (ev) => setEdit(i, { to: ev.target.value && ev.target.value >= r.from ? ev.target.value : r.from }) }),
+            e("input", { type: "number", min: "0", style: { ...mini, width: 64 }, value: r.pallets == null ? "" : r.pallets, placeholder: "Pal.", onChange: (ev) => setEdit(i, { pallets: ev.target.value === "" ? null : parseInt(ev.target.value, 10) }) }),
+            e("input", { style: { ...mini, width: 112 }, value: r.type || "", placeholder: "Tipo (opcional)", onChange: (ev) => setEdit(i, { type: ev.target.value }) }),
+            r.ref ? e("span", { style: pill }, r.ref) : null,
+            r.note ? e("span", { style: { fontSize: 12, color: "#8B9098" } }, r.note) : null,
+            r.guess ? e("span", { style: { ...S.bestTag, background: "#3A2F1A", color: "#E8A33D" } }, "confirmar") : null,
+            r.truncated ? e("span", { style: { fontSize: 12, color: "#E8A33D" } }, "linha cortada?") : null
+          )
+        ))
+      ) : null,
+      parsed.skipped.length > 0 ? e("div", { style: { ...S.hint, color: "#E8A33D" } }, "Linhas ignoradas (não pareciam veículos): ", parsed.skipped.join(" | ")) : null,
+      text.trim() && keptRows.length === 0 ? e("div", { style: S.hint }, "Não encontrei nenhum veículo neste texto. Cada linha precisa pelo menos da cidade, ex: Bremen 3 paletes.") : null,
+      e("button", { style: { ...S.primaryBtn, marginTop: 14, opacity: keptRows.length ? 1 : 0.45, cursor: keptRows.length ? "pointer" : "not-allowed" }, disabled: !keptRows.length, onClick: save },
+        keptRows.length ? "Guardar " + keptRows.length + " veículo(s)" : "Guardar")
+    ),
+    e("div", { style: S.card },
+      e("div", { style: S.rowBetween },
+        e("div", { style: S.cardLabel }, "Frota disponível (" + active.length + ")"),
+        e("div", { style: { display: "flex", gap: 8 } },
+          expired > 0 ? e("button", { style: S.iconBtn, onClick: clearExpired }, "🧹 Limpar " + expired + " expirada(s)") : null,
+          fleet.length > 0 ? e("button", { style: S.iconBtn, onClick: clearAll }, "🗑 Apagar tudo") : null
+        )
+      ),
+      active.length === 0 ? e("div", { style: S.hint }, "Ainda sem disponibilidades importadas. Cola uma lista acima.") : e("div", { style: S.quoteList },
+        active.map((f) => e("div", { key: f.id, style: { ...S.quoteRow, cursor: "default" } },
+          e("div", { style: { flex: 1 } },
+            e("div", { style: S.quoteSupplier }, fleetLocLabel(f), f.ref ? e("span", { style: pill }, f.ref) : null),
+            e("div", { style: S.quoteNotes }, [f.type, f.pallets != null ? f.pallets + " paletes" : "", f.payload != null ? String(f.payload).replace(".", ",") + " t" : "", f.note, f.sourceName ? "de " + f.sourceName : ""].filter(Boolean).join(" · "))
+          ),
+          e("div", { style: S.quotePriceCol },
+            e("div", { style: { ...S.quotePrice, fontSize: 12.5 } }, dateRangeLabel(f.from, f.to)),
+            e("div", { style: { ...S.quotePriceLabel, color: f.lat != null ? "#5FAE7D" : f.geoFail ? "#D9705A" : "#8B9098" } }, f.lat != null ? "📍 localizado" : f.geoFail ? "⚠ local não encontrado" : "⏳ a localizar...")
+          ),
+          e("button", { style: S.iconBtnSmall, title: "Corrigir localização", onClick: () => editLoc(f) }, "✏️"),
+          e("button", { style: S.iconBtnSmall, title: "Remover", onClick: () => removeFleet(f.id) }, "🗑")
+        ))
+      ),
+      active.length > 0 ? e("div", { style: S.hint }, located + " de " + active.length + " com coordenadas. As localizações são resolvidas em segundo plano (OpenStreetMap, cerca de 1 por segundo) e ficam guardadas.") : null
+    )
   );
 }
+function PartnerSuggestions({ sh, partners, fleet, setActiveTabId }) {
+  const e = React.createElement;
+  const [date, setDate] = useState(todayISO());
+  const [searchLoc, setSearchLoc] = useState(sh.pickupLoc || "");
+  const [minPallets, setMinPallets] = useState("");
+  const [radius, setRadius] = useState("");
+  const [results, setResults] = useState([]);
+  const [info, setInfo] = useState({ outOfDate: 0, tooSmall: 0, outOfRange: 0 });
+  const [busy, setBusy] = useState(false);
+  const [targetStatus, setTargetStatus] = useState("none");
+  useEffect(() => {
+    setSearchLoc(sh.pickupLoc || "");
+  }, [sh.pickupLoc]);
+  useEffect(() => {
+    let cancelled = false;
+    if (!partners.length && !fleet.length) {
+      setResults([]);
+      setBusy(false);
+      return;
+    }
+    setBusy(true);
+    const timer = setTimeout(async () => {
+      const minP = parseInt(minPallets, 10) || 0;
+      const maxKm = parseFloat(radius) || 0;
+      const cands = [];
+      let outOfDate = 0, tooSmall = 0;
+      partners.forEach((p) => {
+        const a = availabilityOn(p, date);
+        if (!a) return;
+        cands.push({ key: "p" + p.id, name: p.name, phone: p.phone, loc: (a.loc && a.loc.trim()) || p.baseLoc || "", ref: "", type: p.vehicle || "", pallets: null, capacityText: p.capacity || "", payload: null, note: a.note || p.notes || "", coords: null, geoFail: false, from: a.from, to: a.to || a.from, manual: true });
+      });
+      fleet.forEach((f) => {
+        if (!(f.from <= date && date <= f.to)) { outOfDate++; return; }
+        if (minP && f.pallets != null && f.pallets < minP) { tooSmall++; return; }
+        const pr = partners.find((p) => p.id === f.partnerId);
+        cands.push({ key: "f" + f.id, name: f.sourceName || (pr && pr.name) || "Sem origem", phone: pr ? pr.phone : "", loc: fleetLocLabel(f), ref: f.ref || "", type: f.type || "", pallets: f.pallets, capacityText: "", payload: f.payload, note: f.note || "", coords: f.lat != null ? { lat: f.lat, lon: f.lon } : null, geoFail: !!f.geoFail, from: f.from, to: f.to });
+      });
+      const query = searchLoc.trim();
+      const target = query ? await geocodePlace(query) : null;
+      const out = [];
+      for (const c of cands) {
+        if (cancelled) return;
+        let dist = null, how = "";
+        let pc = c.coords;
+        if (!pc && c.manual && c.loc) pc = await geocodePlace(c.loc);
+        if (target && pc) {
+          dist = distanceKm(target, pc);
+          how = "geo";
+        } else if (query && c.loc && (c.loc.toLowerCase().includes(query.toLowerCase()) || query.toLowerCase().includes(c.loc.toLowerCase()))) {
+          dist = 0;
+          how = "texto";
+        }
+        out.push({ ...c, dist, how });
+      }
+      if (cancelled) return;
+      const inRange = out.filter((r) => !maxKm || r.dist == null || r.dist <= maxKm);
+      inRange.sort((a, b) => {
+        const da = a.dist == null ? Infinity : a.dist, db = b.dist == null ? Infinity : b.dist;
+        return da !== db ? da - db : a.name.localeCompare(b.name);
+      });
+      setResults(inRange);
+      setInfo({ outOfDate, tooSmall, outOfRange: out.length - inRange.length });
+      setTargetStatus(!query ? "none" : target ? "ok" : target === null ? "notfound" : "offline");
+      setBusy(false);
+    }, 700);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [partners, fleet, date, searchLoc, minPallets, radius]);
+  const baseMsg = buildSupplierMessage(sh, "pt", null);
+  const pill = { ...S.bestTag, background: "#2A2E33", color: "#B0B4BA" };
+  const shown = results.slice(0, 15);
+  return e("div", { style: S.card },
+    e("div", { style: S.cardLabel }, "🚚 Veículos sugeridos (por proximidade)"),
+    e("div", { style: S.grid2 },
+      e(Field, { label: "Data de carga" }, e("input", { style: S.input, type: "date", value: date, onChange: (ev) => setDate(ev.target.value) })),
+      e(Field, { label: "Local de carga" }, e("input", { style: S.input, value: searchLoc, onChange: (ev) => setSearchLoc(ev.target.value), placeholder: "ex: Frankfurt, Germany" })),
+      e(Field, { label: "Paletes mínimas (opcional)" }, e("input", { style: S.input, type: "number", min: "1", value: minPallets, onChange: (ev) => setMinPallets(ev.target.value), placeholder: "ex: 4" })),
+      e(Field, { label: "Raio máximo em km (opcional)" }, e("input", { style: S.input, type: "number", min: "1", value: radius, onChange: (ev) => setRadius(ev.target.value), placeholder: "ex: 300" }))
+    ),
+    !partners.length && !fleet.length ? e("div", { style: S.hint }, "Ainda sem disponibilidades. ", e("button", { style: S.iconBtn, onClick: () => setActiveTabId("fleet") }, "Ir para 📥 Disponibilidades")) : null,
+    busy ? e("div", { style: S.hint }, "A calcular distâncias...") : null,
+    !busy && (partners.length || fleet.length) && results.length === 0 ? e("div", { style: S.hint }, "Nenhum veículo disponível a " + formatDatePT(date) + " com estes filtros.") : null,
+    !busy && shown.length > 0 ? e("div", { style: { ...S.quoteList, marginTop: 14 } },
+      shown.map((r, i) => {
+        const msg = (r.ref ? "Veículo " + r.ref + "\n\n" : "") + baseMsg;
+        return e("div", { key: r.key, style: { ...S.quoteRow, cursor: "default", ...(i === 0 && r.dist != null ? S.quoteRowActive : {}) } },
+          e("div", { style: { flex: 1 } },
+            e("div", { style: S.quoteSupplier }, r.name, r.ref ? e("span", { style: pill }, r.ref) : null, i === 0 && r.dist != null ? e("span", { style: S.bestTag }, "mais perto") : null),
+            e("div", { style: S.quoteNotes }, [r.type, r.pallets != null ? r.pallets + " paletes" : r.capacityText, r.payload != null ? String(r.payload).replace(".", ",") + " t" : ""].filter(Boolean).join(" · ")),
+            e("div", { style: S.quoteNotes }, "livre em: " + (r.loc || "—") + " · " + dateRangeLabel(r.from, r.to) + (r.note ? " · " + r.note : ""))
+          ),
+          e("div", { style: S.quotePriceCol },
+            e("div", { style: S.quotePrice }, r.dist == null ? "?" : r.how === "texto" ? "mesmo local" : "≈ " + Math.round(r.dist) + " km"),
+            e("div", { style: S.quotePriceLabel }, r.dist == null ? (r.geoFail ? "local não encontrado" : r.coords || r.manual ? "distância desconhecida" : "a localizar...") : "em linha reta")
+          ),
+          r.phone ? e("button", { style: { ...S.iconBtn, marginLeft: 8 }, onClick: () => window.open(whatsappLink(r.phone, msg), "_blank") }, "💬 WhatsApp") : e(CopyMini, { text: msg, label: "Mensagem" })
+        );
+      })
+    ) : null,
+    !busy && (partners.length || fleet.length) ? e("div", { style: S.hint },
+      results.length > shown.length ? "A mostrar os " + shown.length + " mais próximos de " + results.length + ". " : "",
+      info.outOfDate > 0 ? info.outOfDate + " veículo(s) fora da data. " : "",
+      info.tooSmall > 0 ? info.tooSmall + " com menos paletes. " : "",
+      info.outOfRange > 0 ? info.outOfRange + " fora do raio. " : "",
+      targetStatus === "notfound" ? "Local de carga não encontrado no mapa (tenta 'Cidade, País'). " : "",
+      targetStatus === "offline" ? "Sem ligação ao serviço de mapas: a ordenar só por nome de local. " : "",
+      "Distâncias em linha reta (OpenStreetMap), não são rota."
+    ) : null
+  );
+}
+
 function DispatchDesk() {
   var _a;
   const [shipments, setShipments] = useState(() => {
@@ -937,16 +1442,6 @@ function DispatchDesk() {
     }
   });
   const [activeTabId, setActiveTabId] = useState(((_a = shipments[0]) == null ? void 0 : _a.id) || "new");
-  const [deletedShipments, setDeletedShipments] = useState(() => {
-    try {
-      return JSON.parse(localStorage.getItem(DELETED_STORAGE)) || [];
-    } catch (e) {
-      return [];
-    }
-  });
-  useEffect(() => {
-    localStorage.setItem(DELETED_STORAGE, JSON.stringify(deletedShipments));
-  }, [deletedShipments]);
   const [form, setForm] = useState(emptyShipment());
   const [pasteText, setPasteText] = useState("");
   const [quoteDrafts, setQuoteDrafts] = useState({});
@@ -981,16 +1476,40 @@ function DispatchDesk() {
   const [newListEmailsText, setNewListEmailsText] = useState("");
   const [selectedEmailListByShipment, setSelectedEmailListByShipment] = useState({});
   const [pendingDeleteId, setPendingDeleteId] = useState(null);
-  const [visibleMetrics, setVisibleMetrics] = useState(() => {
+  const [partners, setPartners] = useState(() => {
     try {
-      return JSON.parse(localStorage.getItem(DASHBOARD_METRICS_STORAGE)) || null;
+      return JSON.parse(localStorage.getItem(PARTNERS_STORAGE)) || [];
     } catch (e) {
-      return null;
+      return [];
     }
   });
   useEffect(() => {
-    if (visibleMetrics) localStorage.setItem(DASHBOARD_METRICS_STORAGE, JSON.stringify(visibleMetrics));
-  }, [visibleMetrics]);
+    localStorage.setItem(PARTNERS_STORAGE, JSON.stringify(partners));
+  }, [partners]);
+  const [fleet, setFleet] = useState(() => {
+    try {
+      return JSON.parse(localStorage.getItem(FLEET_STORAGE)) || [];
+    } catch (e) {
+      return [];
+    }
+  });
+  useEffect(() => {
+    localStorage.setItem(FLEET_STORAGE, JSON.stringify(fleet));
+  }, [fleet]);
+  // localiza em segundo plano (1 de cada vez) as carrinhas ainda sem coordenadas
+  useEffect(() => {
+    let cancelled = false;
+    const next = fleet.find((f) => f.lat == null && !f.geoFail);
+    if (!next) return;
+    (async () => {
+      const r = await geocodeVehicle(next);
+      if (cancelled || r === undefined) return;
+      setFleet((list) => list.map((f) => f.id === next.id ? (r ? { ...f, lat: r.lat, lon: r.lon } : { ...f, geoFail: true }) : f));
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [fleet]);
   useEffect(() => {
     localStorage.setItem(EMAIL_LISTS_STORAGE, JSON.stringify(emailLists));
   }, [emailLists]);
@@ -1081,10 +1600,8 @@ function DispatchDesk() {
     setForm(emptyShipment());
     setPasteText("");
   }
-  function removeShipment(id, outcome) {
+  function removeShipment(id) {
     setShipments((s) => {
-      const removed = s.find((sh) => sh.id === id);
-      if (removed) setDeletedShipments((d) => [{ ...removed, deletedAt: Date.now(), outcome: outcome || null }, ...d]);
       const next = s.filter((sh) => sh.id !== id);
       if (activeTabId === id) setActiveTabId(next.length ? next[0].id : "new");
       return next;
@@ -1097,22 +1614,8 @@ function DispatchDesk() {
   function cancelDeleteShipment() {
     setPendingDeleteId(null);
   }
-  function confirmDeleteShipment(outcome) {
-    if (pendingDeleteId) removeShipment(pendingDeleteId, outcome);
-  }
-  function restoreShipment(id) {
-    setDeletedShipments((d) => {
-      const found = d.find((sh) => sh.id === id);
-      if (found) {
-        const { deletedAt, ...rest } = found;
-        setShipments((s) => [rest, ...s]);
-        setActiveTabId(rest.id);
-      }
-      return d.filter((sh) => sh.id !== id);
-    });
-  }
-  function purgeDeletedShipment(id) {
-    setDeletedShipments((d) => d.filter((sh) => sh.id !== id));
+  function confirmDeleteShipment() {
+    if (pendingDeleteId) removeShipment(pendingDeleteId);
   }
   function updateQuoteDraft(shipmentId, field, value) {
     setQuoteDrafts((d) => ({ ...d, [shipmentId]: { ...d[shipmentId], [field]: value } }));
@@ -1146,10 +1649,10 @@ function DispatchDesk() {
   const isCalculatorView = activeTabId === "calculator";
   const isSummaryView = activeTabId === "summary";
   const isEmailListsView = activeTabId === "emaillists";
-  const isHistoryView = activeTabId === "history";
-  const isDashboardView = activeTabId === "dashboard";
-  const isNewView = !isCalculatorView && !isSummaryView && !isEmailListsView && !isHistoryView && !isDashboardView && (activeTabId === "new" || !shipments.some((sh) => sh.id === activeTabId));
-  return /* @__PURE__ */ React.createElement("div", { style: S.shell }, /* @__PURE__ */ React.createElement("div", { style: S.sidebar, className: "dd-sidebar-noprint" }, /* @__PURE__ */ React.createElement("div", { style: S.sidebarHeader }, /* @__PURE__ */ React.createElement("div", { style: S.headerIcon }, "✈️"), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { style: S.title }, "Dispatch Desk"), /* @__PURE__ */ React.createElement("div", { style: S.subtitle }, "gestão de transportes"))), /* @__PURE__ */ React.createElement("button", { style: { ...S.primaryBtn, marginBottom: 10 }, onClick: () => setActiveTabId("new") }, "+ Novo pedido"), /* @__PURE__ */ React.createElement("button", { style: { ...S.navBtn, marginBottom: 4, ...isCalculatorView ? S.navBtnActive : {} }, onClick: () => setActiveTabId("calculator") }, "📐 Calculadora de Carga"), /* @__PURE__ */ React.createElement("button", { style: { ...S.navBtn, marginBottom: 4, ...isSummaryView ? S.navBtnActive : {} }, onClick: () => setActiveTabId("summary") }, "📋 Resumo"), /* @__PURE__ */ React.createElement("button", { style: { ...S.navBtn, marginBottom: 4, ...isEmailListsView ? S.navBtnActive : {} }, onClick: () => setActiveTabId("emaillists") }, "✉️ Listas de Email"), /* @__PURE__ */ React.createElement("button", { style: { ...S.navBtn, marginBottom: 4, ...isHistoryView ? S.navBtnActive : {} }, onClick: () => setActiveTabId("history") }, "🗄️ Histórico"), /* @__PURE__ */ React.createElement("button", { style: { ...S.navBtn, marginBottom: 14, ...isDashboardView ? S.navBtnActive : {} }, onClick: () => setActiveTabId("dashboard") }, "📊 Dashboard"), /* @__PURE__ */ React.createElement("div", { style: S.navList }, shipments.length === 0 && /* @__PURE__ */ React.createElement("div", { style: S.navEmpty }, "Sem pedidos ainda"), shipments.map((sh) => {
+  const isPartnersView = activeTabId === "partners";
+  const isFleetView = activeTabId === "fleet";
+  const isNewView = !isCalculatorView && !isSummaryView && !isEmailListsView && !isPartnersView && !isFleetView && (activeTabId === "new" || !shipments.some((sh) => sh.id === activeTabId));
+  return /* @__PURE__ */ React.createElement("div", { style: S.shell }, /* @__PURE__ */ React.createElement("div", { style: S.sidebar, className: "dd-sidebar-noprint" }, /* @__PURE__ */ React.createElement("div", { style: S.sidebarHeader }, /* @__PURE__ */ React.createElement("div", { style: S.headerIcon }, "✈️"), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { style: S.title }, "Dispatch Desk"), /* @__PURE__ */ React.createElement("div", { style: S.subtitle }, "gestão de transportes"))), /* @__PURE__ */ React.createElement("button", { style: { ...S.primaryBtn, marginBottom: 10 }, onClick: () => setActiveTabId("new") }, "+ Novo pedido"), /* @__PURE__ */ React.createElement("button", { style: { ...S.navBtn, marginBottom: 4, ...isCalculatorView ? S.navBtnActive : {} }, onClick: () => setActiveTabId("calculator") }, "📐 Calculadora de Carga"), /* @__PURE__ */ React.createElement("button", { style: { ...S.navBtn, marginBottom: 4, ...isSummaryView ? S.navBtnActive : {} }, onClick: () => setActiveTabId("summary") }, "📋 Resumo"), /* @__PURE__ */ React.createElement("button", { style: { ...S.navBtn, marginBottom: 4, ...isEmailListsView ? S.navBtnActive : {} }, onClick: () => setActiveTabId("emaillists") }, "✉️ Listas de Email"), /* @__PURE__ */ React.createElement("button", { style: { ...S.navBtn, marginBottom: 4, ...isFleetView ? S.navBtnActive : {} }, onClick: () => setActiveTabId("fleet") }, "📥 Disponibilidades"), /* @__PURE__ */ React.createElement("button", { style: { ...S.navBtn, marginBottom: 14, ...isPartnersView ? S.navBtnActive : {} }, onClick: () => setActiveTabId("partners") }, "🚚 Parceiros"), /* @__PURE__ */ React.createElement("div", { style: S.navList }, shipments.length === 0 && /* @__PURE__ */ React.createElement("div", { style: S.navEmpty }, "Sem pedidos ainda"), shipments.map((sh) => {
     const isActive = sh.id === activeTabId;
     return /* @__PURE__ */ React.createElement("div", { key: sh.id, style: { ...S.navItem, ...isActive ? S.navItemActive : {} }, onClick: () => setActiveTabId(sh.id) }, /* @__PURE__ */ React.createElement("div", { style: { flex: 1, minWidth: 0 } }, /* @__PURE__ */ React.createElement("div", { style: S.navItemLabel }, sh.label.trim() ? sh.label.trim() : `${sh.pickupLoc || "?"} → ${sh.deliveryLoc || "?"}`), /* @__PURE__ */ React.createElement("div", { style: S.navItemSub }, sh.pickupLoc || "?", " → ", sh.deliveryLoc || "?")), /* @__PURE__ */ React.createElement("button", { style: S.tabClose, onClick: (e) => {
       e.stopPropagation();
@@ -1160,7 +1663,7 @@ function DispatchDesk() {
     setShowSettings((s) => !s);
   } }, "⚙️ Definições")), /* @__PURE__ */ React.createElement("div", { style: S.main }, /* @__PURE__ */ React.createElement("div", { style: S.mainInner }, showSettings && /* @__PURE__ */ React.createElement("div", { style: S.card }, /* @__PURE__ */ React.createElement("div", { style: S.cardLabel }, "Tradução automática (opcional)"), /* @__PURE__ */ React.createElement("div", { style: S.hint }, "Para traduzir automaticamente o texto que escreves (não só os rótulos), cola aqui a tua chave da API da Anthropic. Fica guardada só neste browser. Sem chave, os botões PT/EN continuam a trocar o modelo da mensagem, mas o texto que escreveste mantém-se como o inseriste."), /* @__PURE__ */ React.createElement("input", { style: { ...S.input, marginTop: 10, marginBottom: 10 }, type: "password", placeholder: "sk-ant-...", value: apiKeyInput, onChange: (e) => setApiKeyInput(e.target.value) }), /* @__PURE__ */ React.createElement("button", { style: S.primaryBtn, onClick: saveApiKey }, "Guardar chave")), isSummaryView && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("div", { style: S.pageHeading }, "Resumo dos pedidos"), /* @__PURE__ */ React.createElement("div", { style: S.card }, /* @__PURE__ */ React.createElement("div", { style: S.rowBetween }, /* @__PURE__ */ React.createElement("div", { style: S.cardLabel }, "Todos os pedidos ativos"), /* @__PURE__ */ React.createElement("button", { style: { ...S.iconBtn }, onClick: () => window.print() }, "🖨️ Imprimir / PDF")), /* @__PURE__ */ React.createElement("pre", { style: S.emailBox }, buildFullSummary(shipments)), /* @__PURE__ */ React.createElement(CopyBtn, { text: buildFullSummary(shipments), label: "Copiar resumo completo" })), shipments.map((sh) => {
     return /* @__PURE__ */ React.createElement("div", { key: sh.id, style: S.card }, /* @__PURE__ */ React.createElement("div", { style: S.cardLabel }, sh.label.trim() || `${sh.pickupLoc || "?"} → ${sh.deliveryLoc || "?"}`), /* @__PURE__ */ React.createElement("div", { style: S.ticketMeta }, /* @__PURE__ */ React.createElement("span", null, sh.pickupLoc || "?", " → ", sh.deliveryLoc || "?"), /* @__PURE__ */ React.createElement("span", { style: S.dot }, "•"), /* @__PURE__ */ React.createElement("span", null, sh.pickupTime || "sem hora de carga"), /* @__PURE__ */ React.createElement("span", { style: S.dot }, "•"), /* @__PURE__ */ React.createElement("span", null, sh.deliveryTime || "sem hora de entrega")), sh.cargo && /* @__PURE__ */ React.createElement("div", { style: { ...S.ticketMeta, marginTop: 4 } }, /* @__PURE__ */ React.createElement("span", null, sh.cargo)), sh.customs !== "unspecified" && /* @__PURE__ */ React.createElement("div", { style: { ...S.badge, ...sh.customs === "yes" ? S.badgeWarn : S.badgeOk } }, sh.customs === "yes" ? "Customs necessário" : "Sem customs"), /* @__PURE__ */ React.createElement("div", { style: S.divider }), sh.quotes.length > 0 ? /* @__PURE__ */ React.createElement("div", { style: S.quoteList }, sh.quotes.slice().sort((a, b) => a.costPrice - b.costPrice).map((q) => /* @__PURE__ */ React.createElement("div", { key: q.id, style: { ...S.quoteRow, cursor: "default" } }, /* @__PURE__ */ React.createElement("div", { style: { flex: 1 } }, /* @__PURE__ */ React.createElement("div", { style: S.quoteSupplier }, q.supplier), (q.pickupTime || q.deliveryTime) && /* @__PURE__ */ React.createElement("div", { style: S.quoteNotes }, q.pickupTime && /* @__PURE__ */ React.createElement(React.Fragment, null, "carga: ", q.pickupTime), q.pickupTime && q.deliveryTime && " · ", q.deliveryTime && /* @__PURE__ */ React.createElement(React.Fragment, null, "entrega: ", q.deliveryTime)), sh.clientName.trim() && /* @__PURE__ */ React.createElement("div", { style: S.quoteNotes }, "Cliente: ", sh.clientName.trim())), /* @__PURE__ */ React.createElement("div", { style: S.quotePriceCol }, /* @__PURE__ */ React.createElement("div", { style: S.quotePrice }, "€", q.costPrice.toLocaleString("en-US")), /* @__PURE__ */ React.createElement("div", { style: S.quotePriceLabel }, "fornecedor"), q.sellPrice != null && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("div", { style: { ...S.quotePrice, color: "#5FAE7D" } }, "€", q.sellPrice.toLocaleString("en-US")), /* @__PURE__ */ React.createElement("div", { style: S.quotePriceLabel }, "cliente")))))) : /* @__PURE__ */ React.createElement("div", { style: S.hint }, "Sem cotações ainda."));
-  }), shipments.length === 0 && /* @__PURE__ */ React.createElement("div", { style: S.empty }, "Ainda sem pedidos para mostrar no resumo.")), isEmailListsView && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("div", { style: S.pageHeading }, "Listas de Email"), /* @__PURE__ */ React.createElement("div", { style: S.card }, /* @__PURE__ */ React.createElement("div", { style: S.cardLabel }, "Nova lista"), /* @__PURE__ */ React.createElement("div", { style: { marginBottom: 14 } }, /* @__PURE__ */ React.createElement(Field, { label: "Nome da lista" }, /* @__PURE__ */ React.createElement("input", { style: S.input, value: newListName, onChange: (e) => setNewListName(e.target.value), placeholder: "ex: Fornecedores UE" }))), /* @__PURE__ */ React.createElement("div", { style: { marginBottom: 14 } }, /* @__PURE__ */ React.createElement(Field, { label: "Emails (um por linha, ou separados por vírgula)" }, /* @__PURE__ */ React.createElement("textarea", { style: S.textarea, rows: 4, value: newListEmailsText, onChange: (e) => setNewListEmailsText(e.target.value), placeholder: "fornecedor1@exemplo.com\nfornecedor2@exemplo.com" }))), /* @__PURE__ */ React.createElement("button", { style: S.primaryBtn, onClick: addEmailList }, "+ Criar lista")), emailLists.length === 0 ? /* @__PURE__ */ React.createElement("div", { style: S.empty }, "Ainda sem listas guardadas.") : emailLists.map((l) => /* @__PURE__ */ React.createElement("div", { key: l.id, style: S.card }, /* @__PURE__ */ React.createElement("div", { style: S.rowBetween }, /* @__PURE__ */ React.createElement("div", { style: S.cardLabel }, l.name, " (", l.emails.length, ")"), /* @__PURE__ */ React.createElement("button", { style: S.iconBtn, onClick: () => deleteEmailList(l.id) }, "🗑 Remover")), /* @__PURE__ */ React.createElement("div", { style: S.hint }, l.emails.join(", "))))), isHistoryView && /* @__PURE__ */ React.createElement(HistoryView, { deletedShipments, restoreShipment, purgeDeletedShipment }), isDashboardView && /* @__PURE__ */ React.createElement(MetricsDashboard, { shipments, deletedShipments, visibleMetrics, setVisibleMetrics }), isCalculatorView && (() => {
+  }), shipments.length === 0 && /* @__PURE__ */ React.createElement("div", { style: S.empty }, "Ainda sem pedidos para mostrar no resumo.")), isEmailListsView && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("div", { style: S.pageHeading }, "Listas de Email"), /* @__PURE__ */ React.createElement("div", { style: S.card }, /* @__PURE__ */ React.createElement("div", { style: S.cardLabel }, "Nova lista"), /* @__PURE__ */ React.createElement("div", { style: { marginBottom: 14 } }, /* @__PURE__ */ React.createElement(Field, { label: "Nome da lista" }, /* @__PURE__ */ React.createElement("input", { style: S.input, value: newListName, onChange: (e) => setNewListName(e.target.value), placeholder: "ex: Fornecedores UE" }))), /* @__PURE__ */ React.createElement("div", { style: { marginBottom: 14 } }, /* @__PURE__ */ React.createElement(Field, { label: "Emails (um por linha, ou separados por vírgula)" }, /* @__PURE__ */ React.createElement("textarea", { style: S.textarea, rows: 4, value: newListEmailsText, onChange: (e) => setNewListEmailsText(e.target.value), placeholder: "fornecedor1@exemplo.com\nfornecedor2@exemplo.com" }))), /* @__PURE__ */ React.createElement("button", { style: S.primaryBtn, onClick: addEmailList }, "+ Criar lista")), emailLists.length === 0 ? /* @__PURE__ */ React.createElement("div", { style: S.empty }, "Ainda sem listas guardadas.") : emailLists.map((l) => /* @__PURE__ */ React.createElement("div", { key: l.id, style: S.card }, /* @__PURE__ */ React.createElement("div", { style: S.rowBetween }, /* @__PURE__ */ React.createElement("div", { style: S.cardLabel }, l.name, " (", l.emails.length, ")"), /* @__PURE__ */ React.createElement("button", { style: S.iconBtn, onClick: () => deleteEmailList(l.id) }, "🗑 Remover")), /* @__PURE__ */ React.createElement("div", { style: S.hint }, l.emails.join(", "))))), isFleetView && React.createElement(FleetView, { fleet, setFleet, partners, setPartners }), isPartnersView && React.createElement(PartnersView, { partners, setPartners }), isCalculatorView && (() => {
     const hasVan = currentVan.length && currentVan.width && currentVan.height;
     const pack = hasVan && cargoItems.length > 0 ? packBoxes(currentVan, cargoItems) : { placed: [], unplaced: [] };
     const vCapacity = parseFloat(currentVan.capacity) || 0;
@@ -1205,7 +1708,7 @@ function DispatchDesk() {
         onChange: (e) => updateShipmentField(sh.id, "label", e.target.value),
         placeholder: "Dar nome a este pedido..."
       }
-    ), /* @__PURE__ */ React.createElement("button", { style: S.iconBtn, onClick: () => requestDeleteShipment(sh.id) }, "🗑 Remover")), /* @__PURE__ */ React.createElement("div", { style: S.card }, /* @__PURE__ */ React.createElement("div", { style: S.cardLabel }, "Detalhes do pedido"), /* @__PURE__ */ React.createElement("div", { style: { marginBottom: 16 } }, /* @__PURE__ */ React.createElement(Field, { label: "Nome do cliente (opcional)" }, /* @__PURE__ */ React.createElement("input", { style: S.input, value: sh.clientName, onChange: (e) => updateShipmentField(sh.id, "clientName", e.target.value), placeholder: "Client Name" }))), /* @__PURE__ */ React.createElement("div", { style: S.grid2 }, /* @__PURE__ */ React.createElement(Field, { label: "Local de carga" }, /* @__PURE__ */ React.createElement("input", { style: S.input, value: sh.pickupLoc, onChange: (e) => updateShipmentField(sh.id, "pickupLoc", e.target.value), placeholder: "FRA apt" })), /* @__PURE__ */ React.createElement(Field, { label: "Data / hora de carga" }, /* @__PURE__ */ React.createElement("input", { style: S.input, value: sh.pickupTime, onChange: (e) => updateShipmentField(sh.id, "pickupTime", e.target.value), placeholder: "ready this afternoon" })), /* @__PURE__ */ React.createElement(Field, { label: "Local de entrega" }, /* @__PURE__ */ React.createElement("input", { style: S.input, value: sh.deliveryLoc, onChange: (e) => updateShipmentField(sh.id, "deliveryLoc", e.target.value), placeholder: "NAP apt" })), /* @__PURE__ */ React.createElement(Field, { label: "Data / hora de entrega" }, /* @__PURE__ */ React.createElement("input", { style: S.input, value: sh.deliveryTime, onChange: (e) => updateShipmentField(sh.id, "deliveryTime", e.target.value), placeholder: "by Monday 17th Aug" })), /* @__PURE__ */ React.createElement(Field, { label: "Carga (dimensões / peso)" }, /* @__PURE__ */ React.createElement("input", { style: S.input, value: sh.cargo, onChange: (e) => updateShipmentField(sh.id, "cargo", e.target.value), placeholder: "1x 30x20x20cm, 0.60kg" })), /* @__PURE__ */ React.createElement(Field, { label: "Customs" }, /* @__PURE__ */ React.createElement("select", { style: S.input, value: sh.customs, onChange: (e) => updateShipmentField(sh.id, "customs", e.target.value) }, /* @__PURE__ */ React.createElement("option", { value: "unspecified" }, "Por confirmar"), /* @__PURE__ */ React.createElement("option", { value: "yes" }, "Necessário"), /* @__PURE__ */ React.createElement("option", { value: "no" }, "Não necessário"))))), /* @__PURE__ */ React.createElement("div", { className: "dd-grid", style: { marginTop: 24 } }, /* @__PURE__ */ React.createElement("div", { style: S.card }, /* @__PURE__ */ React.createElement("div", { style: S.cardLabel }, "Cotações"), sh.quotes.length > 0 && /* @__PURE__ */ React.createElement("div", { style: S.quoteList }, sh.quotes.slice().sort((a, b) => a.costPrice - b.costPrice).map((q) => /* @__PURE__ */ React.createElement("label", { key: q.id, style: { ...S.quoteRow, ...q.id === chosenId ? S.quoteRowActive : {} } }, /* @__PURE__ */ React.createElement("input", { type: "radio", name: `quote-${sh.id}`, checked: q.id === chosenId, onChange: () => setSelectedQuote({ ...selectedQuote, [sh.id]: q.id }), style: { marginRight: 8 } }), /* @__PURE__ */ React.createElement("div", { style: { flex: 1 } }, /* @__PURE__ */ React.createElement("div", { style: S.quoteSupplier }, q.supplier, q.id === best && /* @__PURE__ */ React.createElement("span", { style: S.bestTag }, "melhor preço")), (q.pickupTime || q.deliveryTime) && /* @__PURE__ */ React.createElement("div", { style: S.quoteNotes }, q.pickupTime && /* @__PURE__ */ React.createElement(React.Fragment, null, "carga: ", q.pickupTime), q.pickupTime && q.deliveryTime && " · ", q.deliveryTime && /* @__PURE__ */ React.createElement(React.Fragment, null, "entrega: ", q.deliveryTime))), /* @__PURE__ */ React.createElement("div", { style: S.quotePriceCol }, /* @__PURE__ */ React.createElement("div", { style: S.quotePrice }, "€", q.costPrice.toLocaleString("en-US")), /* @__PURE__ */ React.createElement("div", { style: S.quotePriceLabel }, "fornecedor"), q.sellPrice != null && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("div", { style: { ...S.quotePrice, color: "#5FAE7D" } }, "€", q.sellPrice.toLocaleString("en-US")), /* @__PURE__ */ React.createElement("div", { style: S.quotePriceLabel }, "cliente"))), /* @__PURE__ */ React.createElement("button", { style: S.iconBtnSmall, onClick: (e) => {
+    ), /* @__PURE__ */ React.createElement("button", { style: S.iconBtn, onClick: () => requestDeleteShipment(sh.id) }, "🗑 Remover")), /* @__PURE__ */ React.createElement("div", { style: S.card }, /* @__PURE__ */ React.createElement("div", { style: S.cardLabel }, "Detalhes do pedido"), /* @__PURE__ */ React.createElement("div", { style: { marginBottom: 16 } }, /* @__PURE__ */ React.createElement(Field, { label: "Nome do cliente (opcional)" }, /* @__PURE__ */ React.createElement("input", { style: S.input, value: sh.clientName, onChange: (e) => updateShipmentField(sh.id, "clientName", e.target.value), placeholder: "Client Name" }))), /* @__PURE__ */ React.createElement("div", { style: S.grid2 }, /* @__PURE__ */ React.createElement(Field, { label: "Local de carga" }, /* @__PURE__ */ React.createElement("input", { style: S.input, value: sh.pickupLoc, onChange: (e) => updateShipmentField(sh.id, "pickupLoc", e.target.value), placeholder: "FRA apt" })), /* @__PURE__ */ React.createElement(Field, { label: "Data / hora de carga" }, /* @__PURE__ */ React.createElement("input", { style: S.input, value: sh.pickupTime, onChange: (e) => updateShipmentField(sh.id, "pickupTime", e.target.value), placeholder: "ready this afternoon" })), /* @__PURE__ */ React.createElement(Field, { label: "Local de entrega" }, /* @__PURE__ */ React.createElement("input", { style: S.input, value: sh.deliveryLoc, onChange: (e) => updateShipmentField(sh.id, "deliveryLoc", e.target.value), placeholder: "NAP apt" })), /* @__PURE__ */ React.createElement(Field, { label: "Data / hora de entrega" }, /* @__PURE__ */ React.createElement("input", { style: S.input, value: sh.deliveryTime, onChange: (e) => updateShipmentField(sh.id, "deliveryTime", e.target.value), placeholder: "by Monday 17th Aug" })), /* @__PURE__ */ React.createElement(Field, { label: "Carga (dimensões / peso)" }, /* @__PURE__ */ React.createElement("input", { style: S.input, value: sh.cargo, onChange: (e) => updateShipmentField(sh.id, "cargo", e.target.value), placeholder: "1x 30x20x20cm, 0.60kg" })), /* @__PURE__ */ React.createElement(Field, { label: "Customs" }, /* @__PURE__ */ React.createElement("select", { style: S.input, value: sh.customs, onChange: (e) => updateShipmentField(sh.id, "customs", e.target.value) }, /* @__PURE__ */ React.createElement("option", { value: "unspecified" }, "Por confirmar"), /* @__PURE__ */ React.createElement("option", { value: "yes" }, "Necessário"), /* @__PURE__ */ React.createElement("option", { value: "no" }, "Não necessário"))))), React.createElement("div", { style: { marginTop: 24 } }, React.createElement(PartnerSuggestions, { key: sh.id, sh, partners, fleet, setActiveTabId })), /* @__PURE__ */ React.createElement("div", { className: "dd-grid", style: { marginTop: 24 } }, /* @__PURE__ */ React.createElement("div", { style: S.card }, /* @__PURE__ */ React.createElement("div", { style: S.cardLabel }, "Cotações"), sh.quotes.length > 0 && /* @__PURE__ */ React.createElement("div", { style: S.quoteList }, sh.quotes.slice().sort((a, b) => a.costPrice - b.costPrice).map((q) => /* @__PURE__ */ React.createElement("label", { key: q.id, style: { ...S.quoteRow, ...q.id === chosenId ? S.quoteRowActive : {} } }, /* @__PURE__ */ React.createElement("input", { type: "radio", name: `quote-${sh.id}`, checked: q.id === chosenId, onChange: () => setSelectedQuote({ ...selectedQuote, [sh.id]: q.id }), style: { marginRight: 8 } }), /* @__PURE__ */ React.createElement("div", { style: { flex: 1 } }, /* @__PURE__ */ React.createElement("div", { style: S.quoteSupplier }, q.supplier, q.id === best && /* @__PURE__ */ React.createElement("span", { style: S.bestTag }, "melhor preço")), (q.pickupTime || q.deliveryTime) && /* @__PURE__ */ React.createElement("div", { style: S.quoteNotes }, q.pickupTime && /* @__PURE__ */ React.createElement(React.Fragment, null, "carga: ", q.pickupTime), q.pickupTime && q.deliveryTime && " · ", q.deliveryTime && /* @__PURE__ */ React.createElement(React.Fragment, null, "entrega: ", q.deliveryTime))), /* @__PURE__ */ React.createElement("div", { style: S.quotePriceCol }, /* @__PURE__ */ React.createElement("div", { style: S.quotePrice }, "€", q.costPrice.toLocaleString("en-US")), /* @__PURE__ */ React.createElement("div", { style: S.quotePriceLabel }, "fornecedor"), q.sellPrice != null && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("div", { style: { ...S.quotePrice, color: "#5FAE7D" } }, "€", q.sellPrice.toLocaleString("en-US")), /* @__PURE__ */ React.createElement("div", { style: S.quotePriceLabel }, "cliente"))), /* @__PURE__ */ React.createElement("button", { style: S.iconBtnSmall, onClick: (e) => {
       e.preventDefault();
       removeQuote(sh.id, q.id);
     } }, "🗑")))), /* @__PURE__ */ React.createElement("div", { style: S.addQuoteGrid }, /* @__PURE__ */ React.createElement("input", { style: S.input, placeholder: "Fornecedor", value: draft.supplier, onChange: (e) => updateQuoteDraft(sh.id, "supplier", e.target.value) }), /* @__PURE__ */ React.createElement("input", { style: S.input, placeholder: "Quando carrega", value: draft.pickupTime, onChange: (e) => updateQuoteDraft(sh.id, "pickupTime", e.target.value) }), /* @__PURE__ */ React.createElement("input", { style: S.input, placeholder: "Quando entrega", value: draft.deliveryTime, onChange: (e) => updateQuoteDraft(sh.id, "deliveryTime", e.target.value) }), /* @__PURE__ */ React.createElement("input", { style: S.input, placeholder: "Preço fornecedor (€)", type: "number", value: draft.costPrice, onChange: (e) => updateQuoteDraft(sh.id, "costPrice", e.target.value) }), /* @__PURE__ */ React.createElement("input", { style: S.input, placeholder: "Preço ao cliente (€)", type: "number", value: draft.sellPrice, onChange: (e) => updateQuoteDraft(sh.id, "sellPrice", e.target.value) }), /* @__PURE__ */ React.createElement("button", { style: S.secondaryBtn, onClick: () => addQuote(sh.id) }, "+ Adicionar"))), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 24 } }, /* @__PURE__ */ React.createElement("div", { style: S.card }, /* @__PURE__ */ React.createElement("div", { style: S.rowBetween }, /* @__PURE__ */ React.createElement("div", { style: S.cardLabel }, "Mensagem para fornecedores"), /* @__PURE__ */ React.createElement(
@@ -1227,7 +1730,7 @@ function DispatchDesk() {
         }
       }
     )), translating === `sh-email-${sh.id}` && /* @__PURE__ */ React.createElement("div", { style: S.hint }, "A traduzir..."), /* @__PURE__ */ React.createElement("pre", { style: S.emailBox }, buildEmail(sh, lang, chosen, getTranslated(`sh-email-${sh.id}`, { pickupLoc: sh.pickupLoc, pickupTime: (chosen == null ? void 0 : chosen.pickupTime) || sh.pickupTime, deliveryLoc: sh.deliveryLoc, deliveryTime: (chosen == null ? void 0 : chosen.deliveryTime) || sh.deliveryTime, cargo: sh.cargo }, lang))), /* @__PURE__ */ React.createElement(CopyBtn, { text: buildEmail(sh, lang, chosen, getTranslated(`sh-email-${sh.id}`, { pickupLoc: sh.pickupLoc, pickupTime: (chosen == null ? void 0 : chosen.pickupTime) || sh.pickupTime, deliveryLoc: sh.deliveryLoc, deliveryTime: (chosen == null ? void 0 : chosen.deliveryTime) || sh.deliveryTime, cargo: sh.cargo }, lang)), label: "Copiar email" })))));
-  }), /* @__PURE__ */ React.createElement("div", { style: S.footNote }, "📦 Os teus pedidos ficam guardados neste browser (mesmo depois de fechares)."))), pendingDeleteId && /* @__PURE__ */ React.createElement(ConfirmDeleteModal, { onAccepted: () => confirmDeleteShipment("accepted"), onRejected: () => confirmDeleteShipment("rejected"), onCancel: cancelDeleteShipment }));
+  }), /* @__PURE__ */ React.createElement("div", { style: S.footNote }, "📦 Os teus pedidos ficam guardados neste browser (mesmo depois de fechares)."))), pendingDeleteId && /* @__PURE__ */ React.createElement(ConfirmDeleteModal, { onConfirm: confirmDeleteShipment, onCancel: cancelDeleteShipment }));
 }
 const mono = "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace";
 const sans = "-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
