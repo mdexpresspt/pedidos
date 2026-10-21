@@ -937,13 +937,20 @@ const COUNTRY_WORDS = {
 // devolve {from, to, s} com a data encontrada no texto (dd.mm.aaaa, dd.mm, tomorrow/amanhã, today/hoje, dia da semana) removida de s
 function extractDate(s, base) {
   let from = null, to = null, dm;
-  dm = s.match(/(\d{1,2})[./](\d{1,2})[./](\d{4}|\d{2})(?!\d)/);
+  dm = s.match(/(?<!\d)(\d{1,2})[./](\d{1,2})[./](\d{4}|\d{2})(?!\d)/);
   if (dm) {
     const iso = isoFromParts(dm[1], dm[2], dm[3]);
     if (iso) { from = to = iso; s = s.replace(dm[0], " "); }
   }
   if (!from) {
-    dm = s.match(/(^|[^\d])(\d{1,2})[./](\d{1,2})(?![\d./])/);
+    dm = s.match(/(?<!\d)(\d{1,2})-(\d{1,2})-(\d{4})(?!\d)/);
+    if (dm) {
+      const iso = isoFromParts(dm[1], dm[2], dm[3]);
+      if (iso) { from = to = iso; s = s.replace(dm[0], " "); }
+    }
+  }
+  if (!from) {
+    dm = s.match(/(^|[^\d])(\d{1,2})[./](\d{1,2})\.?(?![\d])/);
     if (dm) {
       const iso = isoFromParts(dm[2], dm[3], base.slice(0, 4));
       if (iso) { from = to = iso; s = s.replace(dm[0], dm[1] + " "); }
@@ -1009,7 +1016,8 @@ Object.keys(CITY_LISTS).forEach((cc) => CITY_LISTS[cc].split(",").forEach((c) =>
 
 /* ===== Base de cidades (offline), aliases e aeroportos ===== */
 function normPlace(s) {
-  return String(s || "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/\s+/g, " ").trim();
+  const MAP = { "ł": "l", "Ł": "l", "ø": "o", "Ø": "o", "đ": "d", "Đ": "d", "ß": "ss", "æ": "ae", "Æ": "ae", "œ": "oe", "Œ": "oe", "ð": "d", "þ": "th" };
+  return String(s || "").replace(/[łŁøØđĐßæÆœŒðþ]/g, (ch) => MAP[ch]).normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[\u2010-\u2015\-'\u2019`\u00b4.,;:()\/]/g, " ").replace(/\s+/g, " ").trim();
 }
 let _geoReady = false;
 const GEO_IDX = {};
@@ -1030,7 +1038,14 @@ const GEO_ALIAS = {
   napoles: "naples", veneza: "venice", florenca: "florence", colonia: "koln", munique: "munich",
   nuremberga: "nurnberg", hamburgo: "hamburg", berlim: "berlin", sevilha: "sevilla", saragoça: "zaragoza", saragoca: "zaragoza",
   copenhaga: "copenhagen", estocolmo: "stockholm", atenas: "athens", bucareste: "bucharest",
-  budapeste: "budapest"
+  budapeste: "budapest",
+  mediolan: "milan", brema: "bremen", hanower: "hannover", monachium: "munich", kolonia: "koln", norymberga: "nurnberg",
+  drezno: "dresden", lipsk: "leipzig", wieden: "vienna", rzym: "rome", wenecja: "venice", turyn: "turin", neapol: "naples",
+  genua: "genoa", florencja: "florence", bruksela: "brussels", antwerpia: "antwerpen", lizbona: "lisbon", madryt: "madrid",
+  sewilla: "sevilla", kopenhaga: "copenhagen", sztokholm: "stockholm", ryga: "riga", wilno: "vilnius", bukareszt: "bucharest",
+  budapeszt: "budapest", belgrad: "belgrade", ateny: "athens", zagrzeb: "zagreb", lublana: "ljubljana", bratyslawa: "bratislava",
+  marsylia: "marseille", strasburg: "strasbourg", genewa: "geneva", zurych: "zurich", bazylea: "basel", londyn: "london",
+  "frankfurt nad menem": "frankfurt am main", vienne: "vienna"
 };
 const AIRPORTS = {
   FRA: "Frankfurt am Main|DE", MUC: "Munich|DE", HAM: "Hamburg|DE", DUS: "Dusseldorf|DE", CGN: "Koln|DE", STR: "Stuttgart|DE",
@@ -1063,11 +1078,15 @@ const STOP_TOKENS = new Set(("a e o os as de da do dos das em no na nos nas para
   "segunda terca quarta quinta sexta sabado domingo montag dienstag mittwoch donnerstag freitag samstag sonntag lunes martes " +
   "miercoles jueves viernes sabado ref plate tel phone adr tail lift taho tacho tachograph kmh km eur euro price preco note nota info " +
   "thanks obrigado obrigada regards bom boa good morning hello hi hey ola hola dear best kind cumprimentos please apt airport " +
-  "aeroporto flughafen cars car vehicles vehicle veiculos veiculo list lista total urgent urgente now ready").split(" "));
+  "aeroporto flughafen republic cars car vehicles vehicle veiculos veiculo list lista total urgent urgente now ready at pick up pickup ewp ewps " +
+  "flag country zip direction all eu si non ue ro time city type size status address caddy tilt plandeka taillift adr jacker jack").split(" "));
 const STOP_WORDS = /^(bom|boa|good|hello|hi|hey|ol[aá]|hola|dear|best|kind|regards|obrigad|thanks?|thank|available|dispon|cars?|vehicles?|ve[ií]culos|carrinhas|list|lista|today|hoje|tomorrow|amanh|please|cumprimentos|atenciosamente|total|nota|note|info)/i;
+let GEO_ALIAS_N = {};
 function geoInit() {
   if (_geoReady) return;
   _geoReady = true;
+  GEO_ALIAS_N = {};
+  Object.keys(GEO_ALIAS).forEach((k) => { GEO_ALIAS_N[normPlace(k)] = normPlace(GEO_ALIAS[k]); });
   GEO_RAW.split("\n").forEach((line) => {
     const parts = line.split("|");
     const cc = parts[0];
@@ -1085,17 +1104,20 @@ let GEO_BY_CC = null;
 const _fuzzyCache = {};
 function levCap(a, b, max) {
   if (Math.abs(a.length - b.length) > max) return max + 1;
+  let prev2 = null;
   let prev = [];
   for (let j = 0; j <= b.length; j++) prev[j] = j;
   for (let i = 1; i <= a.length; i++) {
     const cur = [i];
     let rowMin = i;
     for (let j = 1; j <= b.length; j++) {
-      const v = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+      let v = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+      if (prev2 && i > 1 && j > 1 && a[i - 1] === b[j - 2] && a[i - 2] === b[j - 1]) v = Math.min(v, prev2[j - 2] + 1);
       cur[j] = v;
       if (v < rowMin) rowMin = v;
     }
     if (rowMin > max) return max + 1;
+    prev2 = prev;
     prev = cur;
   }
   return prev[b.length];
@@ -1110,6 +1132,7 @@ function fuzzyCity(name, cc) {
   if (!GEO_BY_CC) {
     GEO_BY_CC = {};
     Object.keys(GEO_IDX).forEach((k) => GEO_IDX[k].forEach((ent) => { (GEO_BY_CC[ent.cc] = GEO_BY_CC[ent.cc] || []).push({ k, ent }); }));
+    Object.keys(GEO_ALIAS_N).forEach((ak) => (GEO_IDX[GEO_ALIAS_N[ak]] || []).forEach((ent) => { (GEO_BY_CC[ent.cc] = GEO_BY_CC[ent.cc] || []).push({ k: ak, ent }); }));
   }
   const max = key.length >= 9 ? 2 : 1;
   let best = null, bd = 99;
@@ -1126,7 +1149,7 @@ function lookupCity(name, cc) {
   const key = normPlace(name).replace(/\([^)]*\)/g, " ").replace(/[.,;]/g, " ").replace(/\s+/g, " ").trim();
   if (!key) return null;
   const keys = [];
-  if (GEO_ALIAS[key]) keys.push(GEO_ALIAS[key]);
+  if (GEO_ALIAS_N[key]) keys.push(GEO_ALIAS_N[key]);
   keys.push(key);
   for (const k of keys) {
     const arr = GEO_IDX[k];
@@ -1155,7 +1178,7 @@ function ccFromWord(w) {
 // procura, dentro do texto, o troço (1 a 4 palavras seguidas) que é uma cidade conhecida
 function findCitySpan(s, ccHint) {
   const toks = [];
-  const re = /[A-Za-zÀ-ÿ][A-Za-zÀ-ÿ'’.\-]*/g;
+  const re = /\p{L}[\p{L}'’.\-]*/gu;
   let m;
   while ((m = re.exec(s))) toks.push({ t: m[0].replace(/[.\-]+$/, ""), start: m.index, end: m.index + m[0].length });
   for (let len = Math.min(4, toks.length); len >= 1; len--) {
@@ -1176,27 +1199,54 @@ function findCitySpan(s, ccHint) {
   return null;
 }
 function refineCity(raw, cc) {
-  const toks = String(raw || "").split(/\s+/).filter(Boolean);
+  const toks = String(raw || "").split(/\s+/).map((x) => x.replace(/^[\-–—.]+|[\-–—.]+$/g, "")).filter((x) => /\p{L}/u.test(x));
   for (let len = Math.min(4, toks.length); len >= 1; len--) {
     const phrase = toks.slice(0, len).join(" ");
     const ent = lookupCity(phrase, cc);
     if (ent) return { city: phrase, ent };
   }
   while (toks.length && STOP_TOKENS.has(normPlace(toks[toks.length - 1]))) toks.pop();
-  const city = toks.slice(0, 3).join(" ");
+  const city = toks.slice(0, 4).join(" ").replace(/[\s\-–.]+$/, "");
   const fz = fuzzyCity(city, cc);
-  return { city, ent: fz, fuzzy: fz ? fz.n : "" };
+  if (fz) return { city, ent: fz, fuzzy: fz.n };
+  const sp = toks.length > 1 ? findCitySpan(city, cc) : null;
+  if (sp) return { city, ent: sp.ent, fuzzy: sp.ent.n };
+  return { city, ent: null, fuzzy: "" };
 }
+const COUNTRY_RE = new RegExp("(?<![\\p{L}\\-])(" + Object.keys(COUNTRY_WORDS).sort((a, b) => b.length - a.length).join("|") + ")(?![\\p{L}\\-])", "iu");
 const OLD_PLATE_CC = { D: "DE", F: "FR", I: "IT", E: "ES", A: "AT", B: "BE", L: "LU", P: "PT" };
-const TYPE_RE = /(?<![A-Za-zÀ-ÿ])(box\s?van|sprinter|(?:mega|jumbo)(?:\s?(?:trailer|truck))?|solo(?:\s?truck)?|curtain\s?sider|curtainsider|tautliner|reefer|frigo|trailer|truck|lkw|vans?|carrinha|camiao|camião|bus)(?![A-Za-zÀ-ÿ])/gi;
-function parseVehicleLine(raw, base, def, listMode) {
-  let s = (raw || "").replace(/ /g, " ");
+const TYPE_RE = /(?<![A-Za-zÀ-ÿ])(box\s?van|sprinter|caddy|tilt|plandeka|(?:mega|jumbo)(?:\s?(?:trailer|truck))?|solo(?:\s?truck)?|curtain\s?sider|curtainsider|tautliner|reefer|frigo|trailer|truck|lkw|vans?|carrinha|camiao|camião|bus|box)(?![A-Za-zÀ-ÿ])/gi;
+// códigos postais: UK (NE23 1WB), Irlanda (N39 H6T0), PL/CZ/SK (43-100, 397 01), NL (9206 BB) e numéricos simples
+const POSTAL_SRC = "(?:[A-Z]{1,2}\\d{1,2}[A-Z]?\\s\\d[A-Z]{2}|[A-Z]\\d{2}\\s[A-Z0-9]{4}|\\d{2,5}[\\s-]\\d{2,3}(?!\\d)|\\d{2,6}(?:\\s?[A-Z]{2}(?![A-Za-z]))?)";
+const NOISE_RE = /^(wishing|please|hope\b|have a (nice|good|great)|thank|best\b|kind\b|regards|cumprimentos|obrigad|bom dia|boa (tarde|noite)|good (morning|afternoon|evening)|hello|hi\b|hey\b|ol[aá]\b|hola|abra[cç]o|tel\b|tel[.:]|phone|mob(ile)?\b|whatsapp|e-?mail|www\.|flag\b|country\b|zip\b|city\b|type\b|address\b|size\b|status\b|direction\b|wolne|free vans|pozdrawiam|dzie[nń] dobry|cheers|greetings|sincerely)/i;
+const COMPANY_RE = /(?<![A-Za-z])(srl|s\.r\.l\.?|gmbh|ltd|llc|sp\.? ?z ?o\.? ?o\.?|kft|bv|b\.v\.|transport\w*|logistic\w*|spedition\w*|spedycja|freight|cargo|express|trans)(?![A-Za-z])/i;
+const lead = (x) => String(x || "").replace(/^[^\p{L}\p{N}]+/u, "");
+const SECT_TYPE_RE = /^\s*(vans?|trucks?|lkw|box(?:es)?|tilt|solo|reefers?|trailers?|mega|carrinhas?|camiões|camioes)\s*:?\s*$/i;
+// junta registos "verticais" (bandeira / país / código postal / cidade / tipo, cada um na sua linha)
+function stitchVertical(arr) {
+  const out = [];
+  const isFlag = (x) => /^[\u{1F1E6}-\u{1F1FF}]{2}$/u.test(x);
+  const isCCline = (x) => /^[A-Z]{2}$/.test(x) && EU_CC.includes(x);
+  const looksZip = (x) => x.length <= 10 && /\d/.test(x) && /^[A-Z0-9][A-Z0-9 \-]{1,9}$/i.test(x);
+  const looksSize = (x) => x.length <= 40 && /(ewp|pal|pallet|palete|caddy|van|box|tilt|truck|\d)/i.test(x);
+  for (let i = 0; i < arr.length; i++) {
+    let j = i;
+    if (isFlag(arr[j])) j++;
+    if (j + 3 < arr.length && isCCline(arr[j]) && looksZip(arr[j + 1]) && !isCCline(arr[j + 2]) && !isFlag(arr[j + 2]) && looksSize(arr[j + 3])) {
+      out.push(arr[j] + " " + arr[j + 1] + " " + arr[j + 2] + " " + arr[j + 3]);
+      i = j + 3;
+      continue;
+    }
+    out.push(arr[i]);
+  }
+  return out;
+}
+function parseVehicleLine(raw, base, def, listMode, sectType) {
+  let s = (raw || "").replace(/ /g, " ").replace(/\t+/g, " ");
   // prefixos de WhatsApp: "[08:30, 19/10/2026] Nome: " ou "19/10/2026, 08:30 - Nome: "
   s = s.replace(/^\s*\[[^\]]*\]\s*[^:\[\]]{1,40}:\s*/, "");
   s = s.replace(/^\s*\d{1,2}[\/.]\d{1,2}[\/.]\d{2,4},?\s+\d{1,2}:\d{2}(?::\d{2})?(?:\s?[AaPp][Mm])?\s*[-–]\s*[^:]{1,40}:\s*/, "");
-  s = s.replace(/^[\s\-–—•*·>▪▫◦●○→✅✔☑🚚🚐🚛•️]+/u, "").trim();
-  if (!s || /:\s*$/.test(s)) return null;
-  const src = s;
+  const src = s.replace(/\s+/g, " ").trim();
   let flagCC = null, truncated = false;
   if (/…|\.\.\.|ler mais|read more/i.test(s)) {
     truncated = true;
@@ -1208,6 +1258,9 @@ function parseVehicleLine(raw, base, def, listMode) {
   });
   s = s.replace(/\(\s*flag\s*:[\s:]*([a-z]{2})?\s*\)/gi, (m, c) => { if (c) flagCC = c.toUpperCase(); return " "; });
   s = s.replace(/:?flag[-_:]\s*([a-z]{2}):?/gi, (m, c) => { flagCC = c.toUpperCase(); return " "; });
+  // símbolos e emojis no início da linha
+  s = s.replace(/^[^\p{L}\p{N}(\[]+/u, "").trim();
+  if (!s || /:\s*$/.test(s)) return null;
   // matrícula / identificação do veículo
   let ref = "";
   s = s.replace(/(^|[\s(])(\(?)\s*([A-Z]{2})\s?(\d{1,3})\s?([A-Z]{2,4})\s*(\)?)(?=$|[\s,;)])/g, (m, pre, op, a, n, c) => {
@@ -1219,15 +1272,32 @@ function parseVehicleLine(raw, base, def, listMode) {
   if (!ref) {
     s = s.replace(/(^|[\s(])(?:[A-Z]{2}-\d{3}-[A-Z]{2}|\d{2}-[A-Z]{2}-\d{2})(?=$|[\s,;)])/, (m) => { ref = m.trim().replace(/^\(/, ""); return " "; });
   }
+  // direção: ">> TO RO", "TO RO", "ALL EU si NON UE"
+  let dir = "";
+  s = s.replace(/(?:>>|=>|->|→)?\s*(?<![A-Za-z])TO\s+([A-Z]{2})(?![A-Za-z])/g, (m, c) => { if (!dir) dir = c; return " "; });
+  s = s.replace(/(?<![A-Za-z])all\s+eu(?:\s+(?:si|and|e|&)\s+non[\s-]?(?:ue|eu))?(?![A-Za-z])/gi, () => { if (!dir) dir = "ALL"; return " "; });
+  s = s.replace(/>>|=>|->|→/g, " ");
   // quantidade ("2x van") e tipo de veículo
   let qty = 1;
   s = s.replace(/(^|\s)(\d{1,2})\s?[x×]\s*(?=(?:box|van|solo|truck|trailer|sprinter|mega|jumbo|carrinha|cami|lkw|curtain|reefer|frigo))/i, (m, pre, n) => { qty = Math.min(20, Math.max(1, parseInt(n, 10))); return pre; });
   let type = "";
-  s = s.replace(TYPE_RE, (m) => { if (!type) type = m.replace(/\s+/g, " ").trim(); return " "; });
-  // paletes, toneladas, ldm, horas
+  s = s.replace(TYPE_RE, (m) => { if (!type) type = m.replace(/\s+/g, " ").trim().toLowerCase(); return " "; });
+  if (!type && sectType) type = sectType.toLowerCase();
+  // dimensões (420/205/220), extras do veículo
+  const notes = [];
+  const dm3 = s.match(/(\d{3})\s?\/\s?(\d{3})\s?\/\s?(\d{3})/);
+  if (dm3) { notes.push(dm3[1] + "×" + dm3[2] + "×" + dm3[3] + " cm"); s = s.replace(dm3[0], " "); }
+  s = s.replace(/(?<![A-Za-z])tail\s?lift(?![A-Za-z])/gi, () => { notes.push("taillift"); return " "; });
+  s = s.replace(/pallet\s?jack(?:er)?/gi, () => { notes.push("porta-paletes"); return " "; });
+  s = s.replace(/(?<![A-Za-z])ADR(?![A-Za-z])/g, () => { notes.push("ADR"); return " "; });
+  s = s.replace(/\++/g, " ");
+  // UK/Irlanda: tirar o código postal antes de procurar paletes/toneladas (ex: "B92 9EP", "N39 H6T0")
+  let preZip = "";
+  s = s.replace(/((?:^|[^A-Za-z0-9])(?:GB|IE)\s*[-–]?\s*)([A-Z]{1,2}\d{1,2}[A-Z]?\s\d[A-Z]{2}|[A-Z]\d{2}\s[A-Z0-9]{4})(?![A-Za-z0-9])/, (m, pre, z) => { preZip = z; return pre; });
+  // paletes, toneladas, ldm, hora
   let pallets = null, payload = null;
-  const pm = s.match(/\(?\s*(\d+)\s*(?:x\s*)?(?:euro\s?pal\w*|europal\w*|europ\w*|eur\.?\s?pal\w*|paletes?|pallets?|palets?|palettes?|paletten|pal(?![A-Za-zÀ-ÿ])|plts?(?![A-Za-zÀ-ÿ])|pls(?![A-Za-zÀ-ÿ])|ep(?![A-Za-zÀ-ÿ]))\s*\)?/i);
-  if (pm) { pallets = parseInt(pm[1], 10); s = s.replace(pm[0], " "); }
+  const pm = s.match(/\(?\s*(\d+(?:[.,]\d+)?)\s*(?:x\s*)?(?:euro\s?pal\w*|europal\w*|europ\w*|eur\.?\s?pal\w*|ewps?(?![A-Za-zÀ-ÿ])|paletes?|pallets?|palets?|palettes?|paletten|pal(?![A-Za-zÀ-ÿ])|plts?(?![A-Za-zÀ-ÿ])|pls(?![A-Za-zÀ-ÿ])|ep(?![A-Za-zÀ-ÿ]))\s*\)?/i);
+  if (pm) { pallets = parseFloat(pm[1].replace(",", ".")); s = s.replace(pm[0], " "); }
   const wm = s.match(/(\d+(?:[.,]\d+)?)\s*(kg|tons?|tonnes?|t)(?![A-Za-zÀ-ÿ])/i);
   if (wm) {
     let v = parseFloat(wm[1].replace(",", "."));
@@ -1235,11 +1305,11 @@ function parseVehicleLine(raw, base, def, listMode) {
     payload = v;
     s = s.replace(wm[0], " ");
   }
-  const extraNotes = [];
   const lm = s.match(/(\d+(?:[.,]\d+)?)\s*(ldm|m3|m³|cbm)(?![A-Za-zÀ-ÿ])/i);
-  if (lm) { extraNotes.push(lm[1] + " " + lm[2].toLowerCase()); s = s.replace(lm[0], " "); }
-  s = s.replace(/(^|[^\d])\d{1,2}[:h]\d{2}(?![\d])/g, "$1 ");
-  // dia da própria linha
+  if (lm) { notes.push(lm[1] + " " + lm[2].toLowerCase()); s = s.replace(lm[0], " "); }
+  let time = "";
+  s = s.replace(/(^|[^\d])(\d{1,2})[:h](\d{2})(?![\d])/g, (m, pre, h, mi) => { if (!time) time = String(h).padStart(2, "0") + ":" + mi; return pre + " "; });
+  // dia da própria linha ("hoje e amanhã" = os dois dias)
   let dt;
   const reToday = /(?<![A-Za-zÀ-ÿ])(today|hoje|heute)(?![A-Za-zÀ-ÿ])/i, reTom = /(?<![A-Za-zÀ-ÿ])(tomorrow|amanh[ãa]|morgen)(?![A-Za-zÀ-ÿ])/i;
   if (reToday.test(s) && reTom.test(s)) {
@@ -1251,7 +1321,6 @@ function parseVehicleLine(raw, base, def, listMode) {
   const from = dt.from || def.from;
   const to = dt.from ? dt.to : def.to;
   // notas entre parêntesis (ex: "(taho)", "(DE)")
-  const notes = extraNotes.slice();
   let noteCC = "";
   s = s.replace(/\(([^()]*)\)/g, (m, inner) => {
     const t = inner.trim();
@@ -1262,20 +1331,16 @@ function parseVehicleLine(raw, base, def, listMode) {
     return " ";
   });
   s = s.replace(/[()]/g, " ");
-  // país por extenso (Germany, Espanha...)
-  let wordCC = "";
-  const cw = findWord(s, Object.keys(COUNTRY_WORDS));
-  if (cw) { wordCC = COUNTRY_WORDS[cw.word]; s = cutRange(s, cw.start, cw.end); }
-  const hint = noteCC || flagCC || wordCC || "";
+  let hint = noteCC || flagCC || "";
   // localização
   let cc = "", postal = "", city = "", ent = null, guess = false, fuzzy = "", conflict = false;
   const strong = pallets != null || payload != null || !!ref || !!type || qty > 1;
   let found = false;
-  // 1) código de país explícito: DE-28307 Bremen, RO 117040 ALBOTA, ES-SALAMANCA, D-28307 Bremen
-  const reCC = new RegExp("(^|[^A-Za-z0-9])(" + EU_CC.join("|") + ")(\\s*[-–]?\\s*)(\\d{2,6}(?:\\s?[A-Z]{2}(?![A-Za-z]))?)?\\s*([A-Za-zÀ-ÿ][A-Za-zÀ-ÿ.'’\\- ]*)?", "g");
+  // 1) código de país explícito: DE-28307 Bremen, RO 117040 ALBOTA, GB - NE23 1WB Cramlington, ES-SALAMANCA
+  const reCC = new RegExp("(^|[^A-Za-z0-9])(" + EU_CC.join("|") + ")(\\s*[-–]?\\s*)(" + POSTAL_SRC + ")?\\s*(\\p{L}[\\p{L}.'’\\- ]*)?", "gu");
   let mm;
   while ((mm = reCC.exec(s))) {
-    const code = mm[2], sep = mm[3] || "", pc = (mm[4] || "").trim(), rest = (mm[5] || "").trim();
+    const code = mm[2], sep = mm[3] || "", pc = (mm[4] || "").trim() || ((code === "GB" || code === "IE") ? preZip : ""), rest = (mm[5] || "").trim();
     if (!rest) continue;
     if (!pc && !/[-–]/.test(sep) && !findCitySpan(rest, code)) continue;
     const r = refineCity(rest, code);
@@ -1285,15 +1350,17 @@ function parseVehicleLine(raw, base, def, listMode) {
     break;
   }
   if (!found) {
-    const om = s.match(/(^|[^A-Za-z0-9])([DFIEABLP])\s?-\s?(\d{4,5})\s+([A-Za-zÀ-ÿ][A-Za-zÀ-ÿ.'’\- ]*)/);
+    const om = s.match(/(^|[^A-Za-z0-9])([DFIEABLP])\s?-\s?(\d{4,5})\s+(\p{L}[\p{L}.'’\- ]*)/u);
     if (om) {
       const code = OLD_PLATE_CC[om[2]];
       const r = refineCity(om[4], code);
       if (r.city) { cc = code; postal = om[3]; city = r.city; ent = r.ent; fuzzy = r.fuzzy || ""; found = true; if (!ent && lookupCity(city, "")) conflict = true; }
     }
   }
-  // 2) só a cidade: procura o troço que é uma cidade conhecida
+  // 2) só a cidade: procura o troço que é uma cidade conhecida (país por extenso: Germany, Espanha...)
   if (!found) {
+    const cwm = s.match(COUNTRY_RE);
+    if (cwm) { if (!hint) hint = COUNTRY_WORDS[cwm[1].toLowerCase()] || ""; s = s.replace(cwm[0], " "); }
     const sp = findCitySpan(s, hint) || (hint ? findCitySpan(s, "") : null);
     if (sp) {
       city = sp.phrase; ent = sp.ent; cc = hint && ent.cc === hint ? hint : (hint || ent.cc); found = true;
@@ -1305,7 +1372,7 @@ function parseVehicleLine(raw, base, def, listMode) {
   if (!found) {
     if (STOP_WORDS.test(s.trim())) return null;
     const toks = [];
-    const re = /[A-Za-zÀ-ÿ][A-Za-zÀ-ÿ'’.\-]*/g;
+    const re = /\p{L}[\p{L}'’.\-]*/gu;
     let m;
     while ((m = re.exec(s))) toks.push({ t: m[0].replace(/[.\-]+$/, ""), start: m.index, end: m.index + m[0].length });
     let run = [];
@@ -1326,39 +1393,56 @@ function parseVehicleLine(raw, base, def, listMode) {
   }
   if (!cc && ent) cc = ent.cc;
   return {
-    type, pallets, payload, cc, postal, city, ref, from, to, note: notes.join(" · "), truncated, guess: guess || conflict, conflict, qty, src, fuzzy,
+    type, pallets, payload, cc, postal, city, ref, from, to, time, dir, note: notes.join(" · "), truncated, guess: guess || conflict, conflict, qty, src, fuzzy,
     lat: ent ? ent.lat : null, lon: ent ? ent.lon : null
   };
+}
+// nome da empresa na 1ª linhas da lista (ex: "⭐ SC AYO SPEED AUTO SRL ⭐")
+function detectPartnerName(text) {
+  const lines = String(text || "").split(/\r?\n/).map((l) => l.trim()).filter(Boolean).slice(0, 6);
+  for (const l of lines) {
+    const t = l.replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}.]+$/gu, "").trim();
+    if (t.length >= 4 && t.length <= 60 && !/\d{2}[./-]\d{2}/.test(t) && COMPANY_RE.test(t) && !/available|dispon|vehicle|vans?\b/i.test(t)) return t;
+  }
+  return "";
 }
 function parseAvailabilityText(text, base, opts) {
   opts = opts || {};
   const head = detectHeader(text);
   const rows = [], ignored = [];
   let headers = 0;
-  const all = [];
+  let all = [];
   (text || "").split(/\r?\n/).forEach((ln) => {
     const parts = ln.includes(";") ? ln.split(";") : [ln];
     const real = parts.filter((p) => p.trim().length >= 4).length >= 2 ? parts : [ln];
     real.forEach((p) => {
-      const t = p.trim();
-      if (t && !/^\d{1,2}:\d{2}$/.test(t)) all.push(t);
+      const t = p.replace(/\t+/g, " ").trim();
+      if (!t || /^\d{1,2}:\d{2}$/.test(t)) return;
+      if (!/[\p{L}\p{N}]/u.test(t) && !/^[\u{1F1E6}-\u{1F1FF}]{2}$/u.test(t)) return;
+      all.push(t);
     });
   });
+  all = stitchVertical(all);
   const listMode = all.length >= 2 && all.filter((l) => l.length <= 60).length >= all.length * 0.6;
   const spanN = opts.span === undefined || opts.span === "auto" ? (head.nextDay ? 1 : 0) : parseInt(opts.span, 10) || 0;
-  let sect = null;
+  let sect = null, sectType = "";
   all.forEach((t) => {
+    const tl = lead(t);
+    const st = tl.match(SECT_TYPE_RE);
+    if (st) { sectType = st[1].replace(/s$/i, "").toLowerCase(); headers++; return; }
     const def = sect || { from: base, to: addDaysISO(base, spanN) };
-    const isHeader = /available|dispon/i.test(t) && !/europal|pallet|palete/i.test(t);
-    let row = parseVehicleLine(t, base, def, listMode);
+    const isHeader = /available|dispon/i.test(t) && !/europal|pallet|palete|ewp/i.test(t);
+    let row = parseVehicleLine(t, base, def, listMode, sectType);
     if (row && isHeader && (row.guess || !(row.pallets != null || row.payload != null || row.ref))) row = null;
+    if (row && row.guess && (NOISE_RE.test(tl) || COMPANY_RE.test(tl))) row = null;
+    if (row && !row.guess && NOISE_RE.test(tl) && !(row.pallets != null || row.payload != null || row.ref || row.type)) row = null;
     if (row) {
       if (!row.cc && opts.defaultCC) row.cc = opts.defaultCC;
       for (let k = 0; k < Math.max(1, row.qty || 1); k++) rows.push({ ...row });
       return;
     }
-    // título com um dia ("Friday 16.10:", "Tomorrow") aplica-se às linhas seguintes
-    if (t.length <= 90 && (!isHeader || /:\s*$/.test(t))) {
+    // título com um dia ("Friday 16.10:", "For Tuesday 20.10.", "21.10") aplica-se às linhas seguintes
+    if (t.length <= 90 && (!isHeader || /:\s*$/.test(t)) && !NOISE_RE.test(tl)) {
       const d = extractDate(t, base);
       if (d.from) {
         const hasToday = /(?<![A-Za-zÀ-ÿ])(today|hoje|heute)(?![A-Za-zÀ-ÿ])/i.test(t), hasTom = /(?<![A-Za-zÀ-ÿ])(tomorrow|amanh[ãa]|morgen)(?![A-Za-zÀ-ÿ])/i.test(t);
@@ -1369,7 +1453,7 @@ function parseAvailabilityText(text, base, opts) {
         return;
       }
     }
-    if (isHeader || /^(cumprimentos|obrigad|thanks?|thank you|best regards|kind regards|regards|atenciosamente|bom dia|boa tarde|boa noite|good (morning|afternoon|evening)|hello|hi\b|hey\b|ol[aá]\b|hola|abra[cç]o|tel\b|tel[.:]|phone|mob(ile)?\b|whatsapp|e-?mail|www\.)/i.test(t)) { headers++; return; }
+    if (isHeader || NOISE_RE.test(tl) || COMPANY_RE.test(tl)) { headers++; return; }
     ignored.push({ text: t });
   });
   return { rows, ignored, headers, lines: all.length, head, spanN };
@@ -1448,7 +1532,11 @@ function FleetView({ fleet, setFleet, partners, setPartners }) {
   );
   const needs = (r) => r.guess || !r.city || r.truncated || (r.from && r.to && r.to < r.from);
   const live = rowsAll.filter((r) => !dropped[r._k]);
-  const checkCount = live.filter(needs).length;
+  const isExp = (r) => !!r.to && r.to < today;
+  const toSave = live.filter((r) => !isExp(r));
+  const expiredCount = live.length - toSave.length;
+  const suggestedName = React.useMemo(() => detectPartnerName(text), [text]);
+  const checkCount = toSave.filter(needs).length;
   const pendingIgn = parsed.ignored.map((x, i) => ({ ...x, i })).filter((x) => !dismissed[x.i]);
   const shown = only === "check" ? live.filter(needs) : live;
   const mini = { ...S.input, padding: "6px 8px", fontSize: 12.5 };
@@ -1479,7 +1567,7 @@ function FleetView({ fleet, setFleet, partners, setPartners }) {
     setOpen((o) => ({ ...o, [k]: true }));
   }
   function save() {
-    if (!live.length) return;
+    if (!toSave.length) return;
     if (pendingIgn.length && !window.confirm(pendingIgn.length + " linha(s) do texto ficaram por interpretar (caixa amarela em baixo). Guardar mesmo assim, sem elas?")) return;
     const name = source.trim();
     let pid = null;
@@ -1493,7 +1581,7 @@ function FleetView({ fleet, setFleet, partners, setPartners }) {
       }
     }
     const stamp = Date.now();
-    const newRows = live.map((r) => {
+    const newRows = toSave.map((r) => {
       const { truncated, guess, conflict, src, qty, _k, fuzzy, ...rest } = r;
       return { id: uid(), partnerId: pid, sourceName: name, ...rest, importedAt: stamp };
     });
@@ -1521,7 +1609,7 @@ function FleetView({ fleet, setFleet, partners, setPartners }) {
   function renderRow(r) {
     const k = r._k;
     const bad = needs(r);
-    const box = { ...S.quoteRow, cursor: "default", flexDirection: "column", alignItems: "stretch", gap: 6, padding: "9px 12px", flexShrink: 0, ...(bad ? { borderColor: "#6B5326" } : {}) };
+    const box = { ...S.quoteRow, cursor: "default", flexDirection: "column", alignItems: "stretch", gap: 6, padding: "9px 12px", flexShrink: 0, ...(bad ? { borderColor: "#6B5326" } : {}), ...(isExp(r) ? { opacity: 0.5 } : {}) };
     if (open[k]) {
       return e("div", { key: k, style: box },
         e("div", { style: { display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" } },
@@ -1535,24 +1623,27 @@ function FleetView({ fleet, setFleet, partners, setPartners }) {
           e("input", { type: "date", style: { ...mini, width: 136 }, value: r.from || "", onChange: (ev) => setEdit(k, { from: ev.target.value, to: r.to && r.to >= ev.target.value ? r.to : ev.target.value }) }),
           e("span", { style: { color: "#8B9098", fontSize: 12 } }, "→"),
           e("input", { type: "date", style: { ...mini, width: 136 }, value: r.to || "", min: r.from || undefined, onChange: (ev) => setEdit(k, { to: ev.target.value && ev.target.value >= r.from ? ev.target.value : r.from }) }),
-          e("input", { type: "number", min: "0", style: { ...mini, width: 64 }, value: r.pallets == null ? "" : r.pallets, placeholder: "Pal.", onChange: (ev) => setEdit(k, { pallets: ev.target.value === "" ? null : parseInt(ev.target.value, 10) }) }),
+          e("input", { type: "number", min: "0", step: "0.5", style: { ...mini, width: 64 }, value: r.pallets == null ? "" : r.pallets, placeholder: "Pal.", onChange: (ev) => setEdit(k, { pallets: ev.target.value === "" ? null : parseFloat(ev.target.value) }) }),
+          e("input", { type: "time", style: { ...mini, width: 96 }, value: r.time || "", onChange: (ev) => setEdit(k, { time: ev.target.value }) }),
           e("input", { style: { ...mini, width: 112 }, value: r.type || "", placeholder: "Tipo (opcional)", onChange: (ev) => setEdit(k, { type: ev.target.value }) })
         ),
         r.src ? e("div", { style: { fontSize: 11, color: "#5F6369", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } }, "linha original: " + r.src) : null
       );
     }
-    const detail = [r.type, r.pallets != null ? r.pallets + " paletes" : "", r.payload != null ? String(r.payload).replace(".", ",") + " t" : "", r.note].filter(Boolean).join(" · ");
+    const detail = [r.type, r.pallets != null ? String(r.pallets).replace(".", ",") + " paletes" : "", r.payload != null ? String(r.payload).replace(".", ",") + " t" : "", r.note].filter(Boolean).join(" · ");
     return e("div", { key: k, style: box, title: r.src || "" },
       e("div", { style: { display: "flex", alignItems: "center", gap: 8 } },
         e("div", { style: { flex: 1, minWidth: 0, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" } },
           r.cc ? e("span", { style: pill }, r.cc) : e("span", { style: { ...pill, background: "#3A2F1A", color: "#E8A33D" } }, "??"),
           e("span", { style: { fontSize: 14, fontWeight: 600, color: "#EDEBE6" } }, [r.postal, r.city].filter(Boolean).join(" ") || "(sem cidade)"),
           r.ref ? e("span", { style: pill }, r.ref) : null,
+          r.dir && r.dir !== "ALL" ? e("span", { style: pill }, "→ " + r.dir) : null,
+          isExp(r) ? e("span", { style: pill }, "expirada") : null,
           r.guess ? e("span", { style: { ...S.bestTag, background: "#3A2F1A", color: "#E8A33D" } }, (r.conflict ? "país não coincide com a cidade" : "cidade não reconhecida")) : null,
           r.fuzzy && r.fuzzy !== r.city ? e("span", { style: { ...S.bestTag, background: "rgba(95,174,125,0.18)", color: "#5FAE7D" }, title: "Nome parecido encontrado" }, "≈ " + r.fuzzy) : null,
           r.truncated ? e("span", { style: { ...S.bestTag, background: "#3A2F1A", color: "#E8A33D" } }, "linha cortada?") : null
         ),
-        e("div", { style: { ...S.quotePrice, fontSize: 12.5, whiteSpace: "nowrap" } }, dateRangeLabel(r.from, r.to)),
+        e("div", { style: { ...S.quotePrice, fontSize: 12.5, whiteSpace: "nowrap" } }, dateRangeLabel(r.from, r.to) + (r.time ? " " + r.time : "")),
         e("button", { style: S.iconBtnSmall, title: "Corrigir", onClick: () => setOpen({ ...open, [k]: true }) }, "✏️"),
         e("button", { style: S.iconBtnSmall, title: "Ignorar esta linha", onClick: () => setDropped({ ...dropped, [k]: true }) }, "✕")
       ),
@@ -1579,7 +1670,8 @@ function FleetView({ fleet, setFleet, partners, setPartners }) {
       e("div", { style: S.grid2 },
         e(Field, { label: "Parceiro / origem da lista" },
           e("input", { style: S.input, list: "partner-names", value: source, onChange: (ev) => setSource(ev.target.value), placeholder: "ex: nome do parceiro" }),
-          e("datalist", { id: "partner-names" }, partners.map((p) => e("option", { key: p.id, value: p.name })))
+          e("datalist", { id: "partner-names" }, partners.map((p) => e("option", { key: p.id, value: p.name }))),
+          !source.trim() && suggestedName ? e("button", { style: { ...S.iconBtn, marginTop: 6 }, onClick: () => setSource(suggestedName) }, "Usar «" + suggestedName + "»") : null
         ),
         e(Field, { label: "Data da lista (para 'hoje', 'sexta'...)" },
           e("input", { style: S.input, type: "date", value: base, onChange: (ev) => onBase(ev.target.value) })
@@ -1598,8 +1690,9 @@ function FleetView({ fleet, setFleet, partners, setPartners }) {
       ),
       text.trim() ? e("div", { style: { display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap", background: "#0E1013", border: "1px solid #2A2E33", borderRadius: 10, padding: "12px 14px" } },
         e("div", { style: { flex: 1, minWidth: 240, fontSize: 13, lineHeight: 1.6, color: "#B0B4BA" } },
-          e("b", { style: { color: "#EDEBE6" } }, live.length + " veículo(s) lidos"),
-          " de " + parsed.lines + " linhas",
+          e("b", { style: { color: "#EDEBE6" } }, toSave.length + " veículo(s) a guardar"),
+          " (" + parsed.lines + " linhas no texto)",
+          expiredCount > 0 ? e("span", { style: { color: "#8B9098" } }, " · " + expiredCount + " já expirada(s), não guardadas") : null,
           checkCount > 0 ? e("span", { style: { color: "#E8A33D" } }, " · " + checkCount + " a confirmar") : null,
           pendingIgn.length > 0 ? e("span", { style: { color: "#E8A33D" } }, " · " + pendingIgn.length + " por interpretar") : null,
           e("label", { style: { display: "flex", alignItems: "center", gap: 6, fontSize: 12, marginTop: 2 } },
@@ -1607,8 +1700,8 @@ function FleetView({ fleet, setFleet, partners, setPartners }) {
             "Substituir a lista anterior deste parceiro" + (source.trim() ? "" : " (indica o parceiro)")
           )
         ),
-        e("button", { style: { ...S.primaryBtn, width: "auto", padding: "12px 22px", fontSize: 15, opacity: live.length ? 1 : 0.45, cursor: live.length ? "pointer" : "not-allowed" }, disabled: !live.length, onClick: save },
-          "💾 Guardar " + live.length + " veículo(s)")
+        e("button", { style: { ...S.primaryBtn, width: "auto", padding: "12px 22px", fontSize: 15, opacity: toSave.length ? 1 : 0.45, cursor: toSave.length ? "pointer" : "not-allowed" }, disabled: !toSave.length, onClick: save },
+          "💾 Guardar " + toSave.length + " veículo(s)")
       ) : null
     ),
     text.trim() ? e("div", { style: S.card },
@@ -1643,11 +1736,11 @@ function FleetView({ fleet, setFleet, partners, setPartners }) {
       active.length === 0 ? e("div", { style: S.hint }, "Ainda sem disponibilidades importadas. Cola uma lista acima.") : e("div", { style: { ...S.quoteList, maxHeight: "60vh", overflowY: "auto" } },
         activeShown.map((f) => e("div", { key: f.id, style: { ...S.quoteRow, cursor: "default", flexShrink: 0 } },
           e("div", { style: { flex: 1 } },
-            e("div", { style: S.quoteSupplier }, fleetLocLabel(f), f.ref ? e("span", { style: pill }, f.ref) : null),
-            e("div", { style: S.quoteNotes }, [f.type, f.pallets != null ? f.pallets + " paletes" : "", f.payload != null ? String(f.payload).replace(".", ",") + " t" : "", f.note, f.sourceName ? "de " + f.sourceName : ""].filter(Boolean).join(" · "))
+            e("div", { style: S.quoteSupplier }, fleetLocLabel(f), f.ref ? e("span", { style: pill }, f.ref) : null, f.dir && f.dir !== "ALL" ? e("span", { style: pill }, "→ " + f.dir) : null),
+            e("div", { style: S.quoteNotes }, [f.type, f.pallets != null ? String(f.pallets).replace(".", ",") + " paletes" : "", f.payload != null ? String(f.payload).replace(".", ",") + " t" : "", f.note, f.sourceName ? "de " + f.sourceName : ""].filter(Boolean).join(" · "))
           ),
           e("div", { style: S.quotePriceCol },
-            e("div", { style: { ...S.quotePrice, fontSize: 12.5 } }, dateRangeLabel(f.from, f.to)),
+            e("div", { style: { ...S.quotePrice, fontSize: 12.5 } }, dateRangeLabel(f.from, f.to) + (f.time ? " " + f.time : "")),
             e("div", { style: { ...S.quotePriceLabel, color: f.lat != null ? "#5FAE7D" : f.geoFail ? "#D9705A" : "#8B9098" } }, f.lat != null ? "📍 localizado" : f.geoFail ? "⚠ local não encontrado" : "⏳ a localizar...")
           ),
           e("button", { style: S.iconBtnSmall, title: "Corrigir localização", onClick: () => editLoc(f) }, "✏️"),
@@ -1694,7 +1787,7 @@ function PartnerSuggestions({ sh, partners, fleet, setActiveTabId }) {
         if (!(f.from <= date && date <= f.to)) { outOfDate++; return; }
         if (minP && f.pallets != null && f.pallets < minP) { tooSmall++; return; }
         const pr = partners.find((p) => p.id === f.partnerId);
-        cands.push({ key: "f" + f.id, name: f.sourceName || (pr && pr.name) || "Sem origem", phone: pr ? pr.phone : "", loc: fleetLocLabel(f), ref: f.ref || "", type: f.type || "", pallets: f.pallets, capacityText: "", payload: f.payload, note: f.note || "", coords: f.lat != null ? { lat: f.lat, lon: f.lon } : null, geoFail: !!f.geoFail, from: f.from, to: f.to });
+        cands.push({ key: "f" + f.id, name: f.sourceName || (pr && pr.name) || "Sem origem", phone: pr ? pr.phone : "", loc: fleetLocLabel(f), ref: f.ref || "", type: f.type || "", pallets: f.pallets, capacityText: "", payload: f.payload, note: f.note || "", coords: f.lat != null ? { lat: f.lat, lon: f.lon } : null, geoFail: !!f.geoFail, from: f.from, to: f.to, time: f.time || "", dir: f.dir || "" });
       });
       const query = searchLoc.trim();
       const target = query ? await resolvePlace(query) : null;
@@ -1749,8 +1842,8 @@ function PartnerSuggestions({ sh, partners, fleet, setActiveTabId }) {
         return e("div", { key: r.key, style: { ...S.quoteRow, cursor: "default", ...(i === 0 && r.dist != null ? S.quoteRowActive : {}) } },
           e("div", { style: { flex: 1 } },
             e("div", { style: S.quoteSupplier }, r.name, r.ref ? e("span", { style: pill }, r.ref) : null, i === 0 && r.dist != null ? e("span", { style: S.bestTag }, "mais perto") : null),
-            e("div", { style: S.quoteNotes }, [r.type, r.pallets != null ? r.pallets + " paletes" : r.capacityText, r.payload != null ? String(r.payload).replace(".", ",") + " t" : ""].filter(Boolean).join(" · ")),
-            e("div", { style: S.quoteNotes }, "livre em: " + (r.loc || "—") + " · " + dateRangeLabel(r.from, r.to) + (r.note ? " · " + r.note : ""))
+            e("div", { style: S.quoteNotes }, [r.type, r.pallets != null ? String(r.pallets).replace(".", ",") + " paletes" : r.capacityText, r.payload != null ? String(r.payload).replace(".", ",") + " t" : ""].filter(Boolean).join(" · ")),
+            e("div", { style: S.quoteNotes }, "livre em: " + (r.loc || "—") + " · " + dateRangeLabel(r.from, r.to) + (r.time ? " às " + r.time : "") + (r.dir && r.dir !== "ALL" ? " · segue para " + r.dir : "") + (r.note ? " · " + r.note : ""))
           ),
           e("div", { style: S.quotePriceCol },
             e("div", { style: S.quotePrice }, r.dist == null ? "?" : r.how === "texto" ? "mesmo local" : "≈ " + Math.round(r.dist) + " km"),
