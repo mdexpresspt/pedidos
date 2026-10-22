@@ -1021,6 +1021,7 @@ function normPlace(s) {
 }
 let _geoReady = false;
 const GEO_IDX = {};
+const GEO_FIRST = {};
 const GEO_ALIAS = {
   munchen: "munich", lisboa: "lisbon", praha: "prague", wien: "vienna", roma: "rome", milano: "milan", torino: "turin",
   napoli: "naples", firenze: "florence", genova: "genoa", venezia: "venice", padova: "padua", warszawa: "warsaw",
@@ -1097,6 +1098,13 @@ function geoInit() {
       const ent = { n: f[0], cc, lat: parseInt(f[1], 36) / 100 - 90, lon: parseInt(f[2], 36) / 100 - 180, pop: parseInt(f[3], 36) * 100 };
       if (!GEO_IDX[key]) GEO_IDX[key] = [];
       GEO_IDX[key].push(ent);
+      // "Ludwigshafen am Rhein" também responde por "Ludwigshafen" (o resto começa em minúscula: am, an, im, sur…)
+      const mw = f[0].match(/^(\p{Lu}[\p{L}]{3,})\s+(\p{Ll}[\p{L}]*)/u);
+      if (mw) {
+        const fk = normPlace(mw[1]);
+        if (!GEO_FIRST[fk]) GEO_FIRST[fk] = [];
+        GEO_FIRST[fk].push(ent);
+      }
     }
   });
 }
@@ -1144,7 +1152,7 @@ function fuzzyCity(name, cc) {
   return best;
 }
 // devolve {n, cc, lat, lon, pop} ou null; com cc só procura nesse país
-function lookupCity(name, cc) {
+function lookupCity(name, cc, allowFirst) {
   geoInit();
   const key = normPlace(name).replace(/\([^)]*\)/g, " ").replace(/[.,;]/g, " ").replace(/\s+/g, " ").trim();
   if (!key) return null;
@@ -1156,6 +1164,14 @@ function lookupCity(name, cc) {
     if (!arr) continue;
     const pool = cc ? arr.filter((x) => x.cc === cc) : arr;
     if (pool.length) return pool.reduce((a, b) => (b.pop > a.pop ? b : a));
+  }
+  // fallback: nome só com a 1.ª palavra ("Ludwigshafen" → "Ludwigshafen am Rhein"); só dentro do país
+  if (cc && allowFirst) {
+    for (const k of keys) {
+      const arr = GEO_FIRST[k];
+      const pool = arr ? arr.filter((x) => x.cc === cc) : [];
+      if (pool.length) return pool.reduce((a, b) => (b.pop > a.pop ? b : a));
+    }
   }
   return null;
 }
@@ -1202,7 +1218,8 @@ function refineCity(raw, cc) {
   const toks = String(raw || "").split(/\s+/).map((x) => x.replace(/^[\-–—.]+|[\-–—.]+$/g, "")).filter((x) => /\p{L}/u.test(x));
   for (let len = Math.min(4, toks.length); len >= 1; len--) {
     const phrase = toks.slice(0, len).join(" ");
-    const ent = lookupCity(phrase, cc);
+    // só para uma palavra isolada ("LUDWIGSHAFEN"), nunca para um troço de um nome composto ("BARRI DE CAN BROS")
+    const ent = lookupCity(phrase, cc, toks.length === 1);
     if (ent) return { city: phrase, ent };
   }
   while (toks.length && STOP_TOKENS.has(normPlace(toks[toks.length - 1]))) toks.pop();
@@ -1217,7 +1234,7 @@ const COUNTRY_RE = new RegExp("(?<![\\p{L}\\-])(" + Object.keys(COUNTRY_WORDS).s
 const OLD_PLATE_CC = { D: "DE", F: "FR", I: "IT", E: "ES", A: "AT", B: "BE", L: "LU", P: "PT" };
 const TYPE_RE = /(?<![A-Za-zÀ-ÿ])(box\s?van|sprinter|caddy|tilt|plandeka|(?:mega|jumbo)(?:\s?(?:trailer|truck))?|solo(?:\s?truck)?|curtain\s?sider|curtainsider|tautliner|reefer|frigo|trailer|truck|lkw|vans?|carrinha|camiao|camião|bus|box)(?![A-Za-zÀ-ÿ])/gi;
 // códigos postais: UK (NE23 1WB), Irlanda (N39 H6T0), PL/CZ/SK (43-100, 397 01), NL (9206 BB) e numéricos simples
-const POSTAL_SRC = "(?:[A-Z]{1,2}\\d{1,2}[A-Z]?\\s\\d[A-Z]{2}|[A-Z]\\d{2}\\s[A-Z0-9]{4}|\\d{2,5}[\\s-]\\d{2,3}(?!\\d)|\\d{2,6}(?:\\s?[A-Z]{2}(?![A-Za-z]))?)";
+const POSTAL_SRC = "(?:[A-Z]{1,2}\\d{1,2}[A-Z]?\\s\\d[A-Z]{2}|[A-Z]\\d{2}\\s(?=[A-Z0-9]*\\d)[A-Z0-9]{4}|[A-Z]{1,2}\\d{1,2}[A-Z]?(?=\\s+[A-Z]{3,})|\\d{2,5}[\\s-]\\d{2,3}(?!\\d)|\\d{2,6}(?:\\s?[A-Z]{2}(?![A-Za-z]))?)";
 const NOISE_RE = /^(wishing|please|hope\b|have a (nice|good|great)|thank|best\b|kind\b|regards|cumprimentos|obrigad|bom dia|boa (tarde|noite)|good (morning|afternoon|evening)|hello|hi\b|hey\b|ol[aá]\b|hola|abra[cç]o|tel\b|tel[.:]|phone|mob(ile)?\b|whatsapp|e-?mail|www\.|flag\b|country\b|zip\b|city\b|type\b|address\b|size\b|status\b|direction\b|wolne|free vans|pozdrawiam|dzie[nń] dobry|cheers|greetings|sincerely)/i;
 const COMPANY_RE = /(?<![A-Za-z])(srl|s\.r\.l\.?|gmbh|ltd|llc|sp\.? ?z ?o\.? ?o\.?|kft|bv|b\.v\.|transport\w*|logistic\w*|spedition\w*|spedycja|freight|cargo|express|trans)(?![A-Za-z])/i;
 const lead = (x) => String(x || "").replace(/^[^\p{L}\p{N}]+/u, "");
@@ -1460,7 +1477,7 @@ function parseAvailabilityText(text, base, opts) {
 }
 /* ===== Localização: primeiro offline, depois OpenStreetMap ===== */
 async function geocodeVehicle(f) {
-  const off = lookupCity(f.city, f.cc || "");
+  const off = lookupCity(f.city, f.cc || "", true);
   if (off) return { lat: off.lat, lon: off.lon };
   const cc = (f.cc || "").toLowerCase() || undefined;
   const pc = f.postal && f.postal.replace(/\D/g, "").length >= 4 ? f.postal : "";
@@ -1483,7 +1500,7 @@ async function resolvePlace(q) {
   const parts = raw.split(/[,\/]|\s[-–]\s/).map((x) => x.trim()).filter(Boolean);
   const cc = parts.length > 1 ? ccFromWord(parts[parts.length - 1]) : "";
   const cityTxt = (cc ? parts.slice(0, -1) : parts).join(" ").replace(/\b(apt|airport|aeroporto|flughafen|aeroport|aeropuerto|intl|international|cargo)\b/gi, " ").replace(/\d{4,6}/g, " ").replace(/\s+/g, " ").trim();
-  let r = cityTxt ? (lookupCity(cityTxt, cc) || lookupCity(cityTxt, "")) : null;
+  let r = cityTxt ? (lookupCity(cityTxt, cc) || lookupCity(cityTxt, "") || lookupCity(cityTxt, cc, true)) : null;
   if (!r) {
     const sp = findCitySpan(raw, cc) || findCitySpan(raw, "");
     if (sp) r = sp.ent;
