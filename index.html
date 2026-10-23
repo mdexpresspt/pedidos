@@ -1302,6 +1302,8 @@ function parseVehicleLine(raw, base, def, listMode, sectType) {
   if (!type && sectType) type = sectType.toLowerCase();
   // dimensões (420/205/220), extras do veículo
   const notes = [];
+  const dmM = s.match(/(?<![\d.,])(\d[.,]\d{1,2})\s*[x×]\s*(\d[.,]\d{1,2})(?:\s*\(\s*\d[.,]?\d*\s*\))?\s*[x×]\s*(\d[.,]\d{1,2})(?![\d.,])/i);
+  if (dmM) { notes.push(dmM[1] + "×" + dmM[2] + "×" + dmM[3] + " m"); s = s.replace(dmM[0], " "); }
   const dm3 = s.match(/(\d{3})\s?\/\s?(\d{3})\s?\/\s?(\d{3})/);
   if (dm3) { notes.push(dm3[1] + "×" + dm3[2] + "×" + dm3[3] + " cm"); s = s.replace(dm3[0], " "); }
   s = s.replace(/(?<![A-Za-z])tail\s?lift(?![A-Za-z])/gi, () => { notes.push("taillift"); return " "; });
@@ -1326,6 +1328,7 @@ function parseVehicleLine(raw, base, def, listMode, sectType) {
   if (lm) { notes.push(lm[1] + " " + lm[2].toLowerCase()); s = s.replace(lm[0], " "); }
   let time = "";
   s = s.replace(/(^|[^\d])(\d{1,2})[:h](\d{2})(?![\d])/g, (m, pre, h, mi) => { if (!time) time = String(h).padStart(2, "0") + ":" + mi; return pre + " "; });
+  s = s.replace(/(?<![A-Za-zÀ-ÿ])(?:at|às|as|@)\s*(\d{1,2})(?::(\d{2}))?(?![\d])/i, (m, h, mi) => { if (!time && +h < 24) time = String(h).padStart(2, "0") + ":" + (mi || "00"); return " "; });
   // dia da própria linha ("hoje e amanhã" = os dois dias)
   let dt;
   const reToday = /(?<![A-Za-zÀ-ÿ])(today|hoje|heute)(?![A-Za-zÀ-ÿ])/i, reTom = /(?<![A-Za-zÀ-ÿ])(tomorrow|amanh[ãa]|morgen)(?![A-Za-zÀ-ÿ])/i;
@@ -1367,6 +1370,11 @@ function parseVehicleLine(raw, base, def, listMode, sectType) {
     break;
   }
   if (!found) {
+    // só país + código postal, sem nome de cidade (ex: "FR85400", "GB B92"): fica para confirmar com o código postal
+    const po = s.match(new RegExp("(^|[^A-Za-z0-9])(" + EU_CC.join("|") + ")(\\s*[-–]?\\s*)((?:[A-Z]{1,2}\\d{1,2}[A-Z]?(?:\\s\\d[A-Z]{2})?)|(?:\\d{2}[-\\s]\\d{3})|(?:\\d{3}\\s\\d{2})|(?:\\d{2,6}))(?![\\p{L}\\d])", "u"));
+    if (po) { cc = po[2]; postal = po[4].trim(); city = ""; guess = true; found = true; }
+  }
+  if (!found) {
     const om = s.match(/(^|[^A-Za-z0-9])([DFIEABLP])\s?-\s?(\d{4,5})\s+(\p{L}[\p{L}.'’\- ]*)/u);
     if (om) {
       const code = OLD_PLATE_CC[om[2]];
@@ -1386,6 +1394,10 @@ function parseVehicleLine(raw, base, def, listMode, sectType) {
     }
   }
   // 3) cidade desconhecida: só aceita com sinais de ser uma linha de veículo
+  if (!found) {
+    const unk = s.match(/(^|[^A-Za-z0-9])([A-Za-z]{2})\s*[-–]?\s*(\d{4,6})(?!\d)/);
+    if (unk) { cc = ""; postal = unk[3]; city = ""; guess = true; found = true; }
+  }
   if (!found) {
     if (STOP_WORDS.test(s.trim())) return null;
     const toks = [];
@@ -1481,6 +1493,7 @@ async function geocodeVehicle(f) {
   if (off) return { lat: off.lat, lon: off.lon };
   const cc = (f.cc || "").toLowerCase() || undefined;
   const pc = f.postal && f.postal.replace(/\D/g, "").length >= 4 ? f.postal : "";
+  if (!f.city) return pc ? geocodePlace(pc, cc) : null;
   if (pc) {
     const r = await geocodePlace(pc + " " + f.city, cc);
     if (r || r === undefined) return r;
