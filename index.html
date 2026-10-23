@@ -1526,10 +1526,68 @@ function CopyMini({ text, label }) {
   }, ok ? "✓ Copiado" : "📋 " + (label || "Copiar"));
 }
 
+// ---- leitura de capturas de ecrã (OCR no browser, sem API) ----
+let _ocrP = null;
+const OCR_CDN = "https://cdn.jsdelivr.net/npm/";
+function loadOcr() {
+  if (_ocrP) return _ocrP;
+  _ocrP = new Promise((res, rej) => {
+    if (window.Tesseract) return res(window.Tesseract);
+    const sc = document.createElement("script");
+    sc.src = OCR_CDN + "tesseract.js@5.1.1/dist/tesseract.min.js";
+    sc.onload = () => res(window.Tesseract);
+    sc.onerror = () => { _ocrP = null; rej(new Error("Não foi possível carregar o leitor de imagens. Precisa de internet na primeira vez.")); };
+    document.head.appendChild(sc);
+  });
+  return _ocrP;
+}
+// junta as palavras reconhecidas em linhas (pela posição vertical) e limpa o ruído das bandeiras
+function ocrWordsToText(words) {
+  const ws = (words || [])
+    .filter((w) => w.text && w.text.trim() && (w.confidence == null || w.confidence > 20) && w.bbox)
+    .map((w) => ({ t: w.text.trim(), x: w.bbox.x0, y: (w.bbox.y0 + w.bbox.y1) / 2, h: Math.max(6, w.bbox.y1 - w.bbox.y0) }));
+  ws.sort((a, b) => a.y - b.y);
+  const lines = [];
+  let cur = null;
+  for (const w of ws) {
+    if (!cur || Math.abs(w.y - cur.y) > cur.h * 0.6) { cur = { y: w.y, h: w.h, ws: [] }; lines.push(cur); }
+    cur.ws.push(w);
+  }
+  const isCC = (t) => t && t.length === 2 && EU_CC.includes(t.toUpperCase());
+  return lines.map((l) => {
+    l.ws.sort((a, b) => a.x - b.x);
+    let toks = l.ws.map((w) => w.t).filter((t) => !/^[\[\]()|=~_:;.,\-—–]+$/.test(t) && !/^\[.{0,3}\]$/.test(t));
+    // bandeira lida como texto: "SE GB L24 ..." → fica só o código real
+    if (isCC(toks[0]) && isCC(toks[1])) toks = toks.slice(1);
+    if (isCC(toks[0])) toks[0] = toks[0].toUpperCase();
+    return toks.join(" ");
+  }).filter(Boolean).join("\n");
+}
+async function ocrImage(file, onProgress) {
+  const T = await loadOcr();
+  const worker = await T.createWorker("eng", 1, {
+    workerPath: OCR_CDN + "tesseract.js@5.1.1/dist/worker.min.js",
+    corePath: OCR_CDN + "tesseract.js-core@5.1.1",
+    langPath: OCR_CDN + "@tesseract.js-data/eng/4.0.0_best_int",
+    gzip: true,
+    logger: (m) => { if (onProgress && m.status === "recognizing text") onProgress(Math.round(m.progress * 100)); },
+  });
+  try {
+    await worker.setParameters({ tessedit_pageseg_mode: "11" });
+    const { data } = await worker.recognize(file);
+    return ocrWordsToText(data.words);
+  } finally {
+    await worker.terminate();
+  }
+}
+
 function FleetView({ fleet, setFleet, partners, setPartners }) {
   const e = React.createElement;
   const today = todayISO();
   const [text, setText] = useState("");
+  const textRef = React.useRef(text);
+  textRef.current = text;
+  const [ocr, setOcr] = useState(null);
   const [source, setSource] = useState("");
   const [base, setBase] = useState(today);
   const [replaceOld, setReplaceOld] = useState(true);
@@ -1570,6 +1628,26 @@ function FleetView({ fleet, setFleet, partners, setPartners }) {
     resetAll();
     const h = detectHeader(v);
     if (h.date) setBase(h.date);
+  }
+  async function readImage(file) {
+    if (!file) return;
+    setOcr({ state: "busy", pct: 0 });
+    try {
+      const txt = await ocrImage(file, (p) => setOcr({ state: "busy", pct: p }));
+      if (!txt.trim()) { setOcr({ state: "err", msg: "Não consegui ler texto nesta imagem. Tenta uma captura mais nítida ou mais ampliada." }); return; }
+      const prev = textRef.current.replace(/\s+$/, "");
+      onPaste(prev ? prev + "\n" + txt : txt);
+      setOcr({ state: "ok", lines: txt.split("\n").length });
+    } catch (err) {
+      setOcr({ state: "err", msg: String((err && err.message) || err) });
+    }
+  }
+  function onImageFromEvent(ev) {
+    const dt = ev.clipboardData || ev.dataTransfer;
+    const items = dt ? Array.from(dt.items || []) : [];
+    const img = items.find((i) => i.kind === "file" && i.type.startsWith("image/"));
+    const file = img ? img.getAsFile() : (dt && dt.files && dt.files[0] && dt.files[0].type.startsWith("image/") ? dt.files[0] : null);
+    if (file) { ev.preventDefault(); readImage(file); }
   }
   function onBase(v) {
     setBase(v);
@@ -1677,11 +1755,24 @@ function FleetView({ fleet, setFleet, partners, setPartners }) {
     e("div", { style: S.pageHeading }, "Disponibilidades dos parceiros"),
     e("div", { style: S.card },
       e("div", { style: S.cardLabel }, "Colar lista (WhatsApp)"),
+      e("div", { style: { display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 6 } },
+        e("label", { style: { ...S.iconBtn, cursor: "pointer" } },
+          "📷 Ler captura de ecrã",
+          e("input", { type: "file", accept: "image/*", style: { display: "none" }, onChange: (ev) => { readImage(ev.target.files && ev.target.files[0]); ev.target.value = ""; } })
+        ),
+        e("span", { style: { fontSize: 12, color: "#8B9098" } }, "ou cola (Ctrl+V) / arrasta a imagem para a caixa abaixo"),
+        ocr && ocr.state === "busy" ? e("span", { style: { fontSize: 12, color: "#E8A33D" } }, "A ler a imagem… " + ocr.pct + "%") : null,
+        ocr && ocr.state === "ok" ? e("span", { style: { fontSize: 12, color: "#8BC48A" } }, "Imagem lida (" + ocr.lines + " linhas). Confere a revisão antes de guardar.") : null,
+        ocr && ocr.state === "err" ? e("span", { style: { fontSize: 12, color: "#E07A5F" } }, ocr.msg) : null
+      ),
       e("textarea", {
         style: S.textarea,
         rows: 7,
         value: text,
         onChange: (ev) => onPaste(ev.target.value),
+        onPaste: onImageFromEvent,
+        onDragOver: (ev) => ev.preventDefault(),
+        onDrop: (ev) => { ev.preventDefault(); onImageFromEvent(ev); },
         placeholder: "Cola aqui a lista de carrinhas disponíveis, tal como o parceiro a envia...\nex: -box van (3 europal)-2,4 t ES-50500 Tarazona (AG 04 LDV)\nou simplesmente: Bremen 3 paletes amanhã"
       }),
       e("div", { style: S.grid2 },
